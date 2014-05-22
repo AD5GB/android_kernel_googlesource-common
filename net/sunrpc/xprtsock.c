@@ -1882,6 +1882,8 @@ static int xs_local_setup_socket(struct sock_xprt *transport)
 
 	current->flags |= PF_FSTRANS;
 
+	current->flags |= PF_FSTRANS;
+
 	clear_bit(XPRT_CONNECTION_ABORT, &xprt->state);
 	status = __sock_create(xprt->xprt_net, AF_LOCAL,
 					SOCK_STREAM, 0, &sock, 1);
@@ -1920,40 +1922,6 @@ out:
 	xprt_clear_connecting(xprt);
 	xprt_wake_pending_tasks(xprt, status);
 	current->flags &= ~PF_FSTRANS;
-	return status;
-}
-
-static void xs_local_connect(struct rpc_xprt *xprt, struct rpc_task *task)
-{
-	struct sock_xprt *transport = container_of(xprt, struct sock_xprt, xprt);
-	int ret;
-
-	 if (RPC_IS_ASYNC(task)) {
-		/*
-		 * We want the AF_LOCAL connect to be resolved in the
-		 * filesystem namespace of the process making the rpc
-		 * call.  Thus we connect synchronously.
-		 *
-		 * If we want to support asynchronous AF_LOCAL calls,
-		 * we'll need to figure out how to pass a namespace to
-		 * connect.
-		 */
-		rpc_exit(task, -ENOTCONN);
-		return;
-	}
-	ret = xs_local_setup_socket(transport);
-	if (ret && !RPC_IS_SOFTCONN(task))
-		msleep_interruptible(15000);
-}
-
-#ifdef CONFIG_SUNRPC_SWAP
-static void xs_set_memalloc(struct rpc_xprt *xprt)
-{
-	struct sock_xprt *transport = container_of(xprt, struct sock_xprt,
-			xprt);
-
-	if (xprt->swapper)
-		sk_set_memalloc(transport->inet);
 }
 
 /**
@@ -2022,6 +1990,8 @@ static void xs_udp_setup_socket(struct work_struct *work)
 	struct rpc_xprt *xprt = &transport->xprt;
 	struct socket *sock = transport->sock;
 	int status = -EIO;
+
+	current->flags |= PF_FSTRANS;
 
 	current->flags |= PF_FSTRANS;
 
@@ -2164,6 +2134,8 @@ static void xs_tcp_setup_socket(struct work_struct *work)
 	struct socket *sock = transport->sock;
 	struct rpc_xprt *xprt = &transport->xprt;
 	int status = -EIO;
+
+	current->flags |= PF_FSTRANS;
 
 	current->flags |= PF_FSTRANS;
 

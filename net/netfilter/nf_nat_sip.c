@@ -177,7 +177,7 @@ static unsigned int nf_nat_sip(struct sk_buff *skb, unsigned int protoff,
 				    hdr, NULL, &matchoff, &matchlen,
 				    &addr, &port) > 0) {
 		unsigned int olen, matchend, poff, plen, buflen, n;
-		char buffer[INET6_ADDRSTRLEN + sizeof("[]:nnnnn")];
+		char buffer[sizeof("nnn.nnn.nnn.nnn:nnnnn")];
 
 		/* We're only interested in headers related to this
 		 * connection */
@@ -194,9 +194,8 @@ static unsigned int nf_nat_sip(struct sk_buff *skb, unsigned int protoff,
 		}
 
 		olen = *datalen;
-		if (!map_addr(skb, protoff, dataoff, dptr, datalen,
-			      matchoff, matchlen, &addr, port)) {
-			nf_ct_helper_log(skb, ct, "cannot mangle Via header");
+		if (!map_addr(skb, dataoff, dptr, datalen, matchoff, matchlen,
+			      &addr, port))
 			return NF_DROP;
 		}
 

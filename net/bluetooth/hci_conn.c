@@ -28,7 +28,6 @@
 
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
-#include <net/bluetooth/a2mp.h>
 #include <net/bluetooth/smp.h>
 
 static void hci_le_create_connection(struct hci_conn *conn)
@@ -515,8 +514,11 @@ struct hci_dev *hci_get_route(bdaddr_t *dst, bdaddr_t *src)
 }
 EXPORT_SYMBOL(hci_get_route);
 
-static struct hci_conn *hci_connect_le(struct hci_dev *hdev, bdaddr_t *dst,
-				    u8 dst_type, u8 sec_level, u8 auth_type)
+/* Create SCO, ACL or LE connection.
+ * Device _must_ be locked */
+struct hci_conn *hci_connect(struct hci_dev *hdev, int type,
+					__u16 pkt_type, bdaddr_t *dst,
+					__u8 sec_level, __u8 auth_type)
 {
 	struct hci_conn *le;
 
@@ -528,6 +530,10 @@ static struct hci_conn *hci_connect_le(struct hci_dev *hdev, bdaddr_t *dst,
 		le = hci_conn_hash_lookup_state(hdev, LE_LINK, BT_CONNECT);
 		if (le)
 			return ERR_PTR(-EBUSY);
+
+		entry = hci_find_adv_entry(hdev, dst);
+		if (!entry)
+			return ERR_PTR(-EHOSTUNREACH);
 
 		le = hci_conn_add(hdev, LE_LINK, 0, dst);
 		if (!le)
@@ -694,6 +700,9 @@ static void hci_conn_encrypt(struct hci_conn *conn)
 int hci_conn_security(struct hci_conn *conn, __u8 sec_level, __u8 auth_type)
 {
 	BT_DBG("hcon %p", conn);
+
+	if (conn->type == LE_LINK)
+		return smp_conn_security(conn, sec_level);
 
 	if (conn->type == LE_LINK)
 		return smp_conn_security(conn, sec_level);

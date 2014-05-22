@@ -557,16 +557,11 @@ static int get_dimm_config(struct mem_ctl_info *mci)
 		pvt->is_close_pg = false;
 	}
 
-	if (pvt->pci_ddrio) {
-		pci_read_config_dword(pvt->pci_ddrio, RANK_CFG_A, &reg);
-		if (IS_RDIMM_ENABLED(reg)) {
-			/* FIXME: Can also be LRDIMM */
-			edac_dbg(0, "Memory is registered\n");
-			mtype = MEM_RDDR3;
-		} else {
-			edac_dbg(0, "Memory is unregistered\n");
-			mtype = MEM_DDR3;
-		}
+	pci_read_config_dword(pvt->pci_ddrio, RANK_CFG_A, &reg);
+	if (IS_RDIMM_ENABLED(reg)) {
+		/* FIXME: Can also be LRDIMM */
+		debugf0("Memory is registered\n");
+		mtype = MEM_RDDR3;
 	} else {
 		edac_dbg(0, "Cannot determine memory type\n");
 		mtype = MEM_UNKNOWN;
@@ -1602,8 +1597,8 @@ static void sbridge_unregister_mci(struct sbridge_dev *sbridge_dev)
 
 	pvt = mci->pvt_info;
 
-	edac_dbg(0, "MC: mci = %p, dev = %p\n",
-		 mci, &sbridge_dev->pdev[0]->dev);
+	debugf0("MC: " __FILE__ ": %s(): mci = %p, dev = %p\n",
+		__func__, mci, &sbridge_dev->pdev[0]->dev);
 
 	/* Remove MC sysfs nodes */
 	edac_mc_del_mc(mci->pdev);

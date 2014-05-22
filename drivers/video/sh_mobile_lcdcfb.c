@@ -1112,8 +1112,7 @@ static int sh_mobile_lcdc_start(struct sh_mobile_lcdc_priv *priv)
 			continue;
 
 		ch->base_addr_y = ch->dma_handle;
-		ch->base_addr_c = ch->dma_handle
-				+ ch->xres_virtual * ch->yres_virtual;
+		ch->base_addr_c = ch->base_addr_y + ch->xres * ch->yres_virtual;
 		ch->line_size = ch->pitch;
 
 		/* Enable MERAM if possible. */
@@ -1148,8 +1147,8 @@ static int sh_mobile_lcdc_start(struct sh_mobile_lcdc_priv *priv)
 		cache = sh_mobile_meram_cache_alloc(mdev, ch->cfg->meram_cfg,
 					ch->pitch, ch->yres, pixelformat,
 					&ch->line_size);
-		if (!IS_ERR(cache)) {
-			sh_mobile_meram_cache_update(mdev, cache,
+		if (!IS_ERR(meram)) {
+			mdev->ops->meram_update(mdev, meram,
 					ch->base_addr_y, ch->base_addr_c,
 					&ch->base_addr_y, &ch->base_addr_c);
 			ch->cache = cache;

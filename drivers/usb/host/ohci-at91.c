@@ -222,7 +222,7 @@ static void usb_hcd_at91_remove(struct usb_hcd *hcd,
 
 /*-------------------------------------------------------------------------*/
 
-static int
+static int __devinit
 ohci_at91_reset (struct usb_hcd *hcd)
 {
 	struct at91_usbh_data	*board = hcd->self.controller->platform_data;
@@ -236,7 +236,7 @@ ohci_at91_reset (struct usb_hcd *hcd)
 	return 0;
 }
 
-static int
+static int __devinit
 ohci_at91_start (struct usb_hcd *hcd)
 {
 	struct ohci_hcd		*ohci = hcd_to_ohci (hcd);

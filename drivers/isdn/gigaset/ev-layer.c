@@ -184,13 +184,13 @@ struct reply_t gigaset_tab_nocid[] =
 
 	{RSP_STRING,	120, 120, -1,		121, -1, {ACT_SETVER} },
 
-	{EV_TIMEOUT,	120, 121, -1,		  0,  0, {ACT_FAILVER,
-							  ACT_INIT} },
-	{RSP_ERROR,	120, 121, -1,		  0,  0, {ACT_FAILVER,
-							  ACT_INIT} },
-	{RSP_OK,	121, 121, -1,		  0,  0, {ACT_GOTVER,
-							  ACT_INIT} },
-	{RSP_NONE,	121, 121, -1,		120,  0, {ACT_GETSTRING} },
+	{EV_TIMEOUT,	120, 121, -1,			  0,  0, {ACT_FAILVER,
+								  ACT_INIT} },
+	{RSP_ERROR,	120, 121, -1,			  0,  0, {ACT_FAILVER,
+								  ACT_INIT} },
+	{RSP_OK,	121, 121, -1,			  0,  0, {ACT_GOTVER,
+								  ACT_INIT} },
+	{RSP_NONE,	121, 121, -1,			120,  0, {ACT_GETSTRING} },
 
 /* leave dle mode */
 	{RSP_INIT,	  0,   0, SEQ_DLE0,	201,  5, {0},	"^SDLE=0\r"},

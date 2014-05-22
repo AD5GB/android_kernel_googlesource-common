@@ -2169,8 +2169,7 @@ unsigned long vmemmap_table[VMEMMAP_SIZE];
 static long __meminitdata addr_start, addr_end;
 static int __meminitdata node_start;
 
-int __meminit vmemmap_populate(unsigned long vstart, unsigned long vend,
-			       int node)
+int __meminit vmemmap_populate(struct page *start, unsigned long nr, int node)
 {
 	unsigned long phys_start = (vstart - VMEMMAP_BASE);
 	unsigned long phys_end = (vend - VMEMMAP_BASE);
@@ -2222,11 +2221,6 @@ void __meminit vmemmap_populate_print_last(void)
 		node_start = 0;
 	}
 }
-
-void vmemmap_free(unsigned long start, unsigned long end)
-{
-}
-
 #endif /* CONFIG_SPARSEMEM_VMEMMAP */
 
 static void prot_init_common(unsigned long page_none,

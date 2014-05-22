@@ -198,10 +198,68 @@ static struct pci_dev *pc236_find_pci_dev(struct comedi_device *dev,
 		}
 		return pci_dev;
 	}
-	dev_err(dev->class_dev,
-		"No supported board found! (req. bus %d, slot %d)\n",
-		bus, slot);
-	return NULL;
+	if (irq)
+		printk("(irq %u%s) ", irq, (dev->irq ? "" : " UNAVAILABLE"));
+	else
+		printk("(no irq) ");
+
+	printk("attached\n");
+
+	return 1;
+}
+
+/*
+ * _detach is called to deconfigure a device.  It should deallocate
+ * resources.
+ * This function is also called when _attach() fails, so it should be
+ * careful not to release resources that were not necessarily
+ * allocated by _attach().  dev->private and dev->subdevices are
+ * deallocated automatically by the core.
+ */
+static int pc236_detach(struct comedi_device *dev)
+{
+	printk(KERN_DEBUG "comedi%d: %s: detach\n", dev->minor,
+	       PC236_DRIVER_NAME);
+	if (dev->iobase)
+		pc236_intr_disable(dev);
+
+	if (dev->irq)
+		free_irq(dev->irq, dev);
+	if (dev->subdevices)
+		subdev_8255_cleanup(dev, dev->subdevices + 0);
+	if (devpriv) {
+#ifdef CONFIG_COMEDI_PCI
+		if (devpriv->pci_dev) {
+			if (dev->iobase)
+				comedi_pci_disable(devpriv->pci_dev);
+			pci_dev_put(devpriv->pci_dev);
+		} else
+#endif
+		{
+			if (dev->iobase)
+				release_region(dev->iobase, PC236_IO_SIZE);
+		}
+	}
+	if (dev->board_name) {
+		printk(KERN_INFO "comedi%d: %s removed\n",
+		       dev->minor, dev->board_name);
+	}
+	return 0;
+}
+
+/*
+ * This function checks and requests an I/O region, reporting an error
+ * if there is a conflict.
+ */
+static int pc236_request_region(unsigned minor, unsigned long from,
+				unsigned long extent)
+{
+	if (!from || !request_region(from, extent, PC236_DRIVER_NAME)) {
+		printk(KERN_ERR "comedi%d: I/O port conflict (%#lx,%lu)!\n",
+		       minor, from, extent);
+		return -EIO;
+	}
+	return 0;
 }
 
 /*

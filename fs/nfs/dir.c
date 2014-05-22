@@ -1042,7 +1042,7 @@ static int nfs_lookup_revalidate(struct dentry *dentry, unsigned int flags)
 	struct nfs_fattr *fattr = NULL;
 	int error;
 
-	if (flags & LOOKUP_RCU)
+	if (nd && (nd->flags & LOOKUP_RCU))
 		return -ECHILD;
 
 	parent = dget_parent(dentry);
@@ -1479,7 +1479,7 @@ static int nfs4_lookup_revalidate(struct dentry *dentry, unsigned int flags)
 	struct inode *dir;
 	int ret = 0;
 
-	if (flags & LOOKUP_RCU)
+	if (nd && (nd->flags & LOOKUP_RCU))
 		return -ECHILD;
 
 	if (!(flags & LOOKUP_OPEN) || (flags & LOOKUP_DIRECTORY))

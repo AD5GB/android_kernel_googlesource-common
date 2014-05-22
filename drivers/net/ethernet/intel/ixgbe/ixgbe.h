@@ -301,12 +301,7 @@ struct ixgbe_ring_feature {
  */
 static inline unsigned int ixgbe_rx_bufsz(struct ixgbe_ring *ring)
 {
-#ifdef IXGBE_FCOE
-	if (test_bit(__IXGBE_RX_FCOE, &ring->state))
-		return (PAGE_SIZE < 8192) ? IXGBE_RXBUFFER_4K :
-					    IXGBE_RXBUFFER_3K;
-#endif
-	return IXGBE_RXBUFFER_2K;
+	return test_bit(__IXGBE_RX_FCOE, &ring->state) ? 1 : 0;
 }
 
 static inline unsigned int ixgbe_rx_pg_order(struct ixgbe_ring *ring)

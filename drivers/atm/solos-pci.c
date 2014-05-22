@@ -1261,15 +1261,6 @@ static int fpga_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		db_fpga_upgrade = db_firmware_upgrade = 0;
 	}
 
-	/* Stopped using Atmel flash after 0.03-38 */
-	if (fpga_ver < 39)
-		card->atmel_flash = 1;
-	else
-		card->atmel_flash = 0;
-
-	data32 = ioread32(card->config_regs + PORTS);
-	card->nr_ports = (data32 & 0x000000FF);
-
 	if (card->fpga_version >= DMA_SUPPORTED) {
 		pci_set_master(dev);
 		card->using_dma = 1;

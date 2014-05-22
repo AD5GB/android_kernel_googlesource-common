@@ -669,13 +669,34 @@ static void dp_aux_irq_handler(struct drm_device *dev)
 	wake_up_all(&dev_priv->gmbus_wait_queue);
 }
 
-static irqreturn_t valleyview_irq_handler(int irq, void *arg)
+static void gen6_queue_rps_work(struct drm_i915_private *dev_priv,
+				u32 pm_iir)
+{
+	unsigned long flags;
+
+	/*
+	 * IIR bits should never already be set because IMR should
+	 * prevent an interrupt from being shown in IIR. The warning
+	 * displays a case where we've unsafely cleared
+	 * dev_priv->pm_iir. Although missing an interrupt of the same
+	 * type is not a problem, it displays a problem in the logic.
+	 *
+	 * The mask bit in IMR is cleared by rps_work.
+	 */
+
+	spin_lock_irqsave(&dev_priv->rps_lock, flags);
+	dev_priv->pm_iir |= pm_iir;
+	I915_WRITE(GEN6_PMIMR, dev_priv->pm_iir);
+	POSTING_READ(GEN6_PMIMR);
+	spin_unlock_irqrestore(&dev_priv->rps_lock, flags);
+
+	queue_work(dev_priv->wq, &dev_priv->rps_work);
+}
+
+static void pch_irq_handler(struct drm_device *dev, u32 pch_iir)
 {
 	struct drm_device *dev = (struct drm_device *) arg;
 	drm_i915_private_t *dev_priv = (drm_i915_private_t *) dev->dev_private;
-	u32 iir, gt_iir, pm_iir;
-	irqreturn_t ret = IRQ_NONE;
-	unsigned long irqflags;
 	int pipe;
 	u32 pipe_stats[I915_MAX_PIPES];
 
@@ -686,83 +707,6 @@ static irqreturn_t valleyview_irq_handler(int irq, void *arg)
 		gt_iir = I915_READ(GTIIR);
 		pm_iir = I915_READ(GEN6_PMIIR);
 
-		if (gt_iir == 0 && pm_iir == 0 && iir == 0)
-			goto out;
-
-		ret = IRQ_HANDLED;
-
-		snb_gt_irq_handler(dev, dev_priv, gt_iir);
-
-		spin_lock_irqsave(&dev_priv->irq_lock, irqflags);
-		for_each_pipe(pipe) {
-			int reg = PIPESTAT(pipe);
-			pipe_stats[pipe] = I915_READ(reg);
-
-			/*
-			 * Clear the PIPE*STAT regs before the IIR
-			 */
-			if (pipe_stats[pipe] & 0x8000ffff) {
-				if (pipe_stats[pipe] & PIPE_FIFO_UNDERRUN_STATUS)
-					DRM_DEBUG_DRIVER("pipe %c underrun\n",
-							 pipe_name(pipe));
-				I915_WRITE(reg, pipe_stats[pipe]);
-			}
-		}
-		spin_unlock_irqrestore(&dev_priv->irq_lock, irqflags);
-
-		for_each_pipe(pipe) {
-			if (pipe_stats[pipe] & PIPE_VBLANK_INTERRUPT_STATUS)
-				drm_handle_vblank(dev, pipe);
-
-			if (pipe_stats[pipe] & PLANE_FLIPDONE_INT_STATUS_VLV) {
-				intel_prepare_page_flip(dev, pipe);
-				intel_finish_page_flip(dev, pipe);
-			}
-		}
-
-		/* Consume port.  Then clear IIR or we'll miss events */
-		if (iir & I915_DISPLAY_PORT_INTERRUPT) {
-			u32 hotplug_status = I915_READ(PORT_HOTPLUG_STAT);
-			u32 hotplug_trigger = hotplug_status & HOTPLUG_INT_STATUS_I915;
-
-			DRM_DEBUG_DRIVER("hotplug event received, stat 0x%08x\n",
-					 hotplug_status);
-			if (hotplug_trigger) {
-				if (hotplug_irq_storm_detect(dev, hotplug_trigger, hpd_status_i915))
-					i915_hpd_irq_setup(dev);
-				queue_work(dev_priv->wq,
-					   &dev_priv->hotplug_work);
-			}
-			I915_WRITE(PORT_HOTPLUG_STAT, hotplug_status);
-			I915_READ(PORT_HOTPLUG_STAT);
-		}
-
-		if (pipe_stats[0] & PIPE_GMBUS_INTERRUPT_STATUS)
-			gmbus_irq_handler(dev);
-
-		if (pm_iir & GEN6_PM_DEFERRED_EVENTS)
-			gen6_queue_rps_work(dev_priv, pm_iir);
-
-		I915_WRITE(GTIIR, gt_iir);
-		I915_WRITE(GEN6_PMIIR, pm_iir);
-		I915_WRITE(VLV_IIR, iir);
-	}
-
-out:
-	return ret;
-}
-
-static void ibx_irq_handler(struct drm_device *dev, u32 pch_iir)
-{
-	drm_i915_private_t *dev_priv = (drm_i915_private_t *) dev->dev_private;
-	int pipe;
-	u32 hotplug_trigger = pch_iir & SDE_HOTPLUG_MASK;
-
-	if (hotplug_trigger) {
-		if (hotplug_irq_storm_detect(dev, hotplug_trigger, hpd_ibx))
-			ibx_hpd_irq_setup(dev);
-		queue_work(dev_priv->wq, &dev_priv->hotplug_work);
-	}
 	if (pch_iir & SDE_AUDIO_POWER_MASK)
 		DRM_DEBUG_DRIVER("PCH audio power change on port %d\n",
 				 (pch_iir & SDE_AUDIO_POWER_MASK) >>
@@ -846,19 +790,15 @@ static irqreturn_t ivybridge_irq_handler(int irq, void *arg)
 
 	atomic_inc(&dev_priv->irq_received);
 
-	/* disable master interrupt before clearing iir  */
-	de_ier = I915_READ(DEIER);
-	I915_WRITE(DEIER, de_ier & ~DE_MASTER_IRQ_CONTROL);
+	if (de_iir & DE_PIPEA_VBLANK_IVB)
+		drm_handle_vblank(dev, 0);
 
-	/* Disable south interrupts. We'll only write to SDEIIR once, so further
-	 * interrupts will will be stored on its back queue, and then we'll be
-	 * able to process them after we restore SDEIER (as soon as we restore
-	 * it, we'll get an interrupt if SDEIIR still has something to process
-	 * due to its back queue). */
-	if (!HAS_PCH_NOP(dev)) {
-		sde_ier = I915_READ(SDEIER);
-		I915_WRITE(SDEIER, 0);
-		POSTING_READ(SDEIER);
+	if (de_iir & DE_PIPEB_VBLANK_IVB)
+		drm_handle_vblank(dev, 1);
+
+	if (de_iir & DE_PLANEA_FLIP_DONE_IVB) {
+		intel_prepare_page_flip(dev, 0);
+		intel_finish_page_flip_plane(dev, 0);
 	}
 
 	gt_iir = I915_READ(GTIIR);
@@ -868,36 +808,15 @@ static irqreturn_t ivybridge_irq_handler(int irq, void *arg)
 		ret = IRQ_HANDLED;
 	}
 
-	de_iir = I915_READ(DEIIR);
-	if (de_iir) {
-		if (de_iir & DE_AUX_CHANNEL_A_IVB)
-			dp_aux_irq_handler(dev);
-
-		if (de_iir & DE_GSE_IVB)
-			intel_opregion_gse_intr(dev);
-
-		for (i = 0; i < 3; i++) {
-			if (de_iir & (DE_PIPEA_VBLANK_IVB << (5 * i)))
-				drm_handle_vblank(dev, i);
-			if (de_iir & (DE_PLANEA_FLIP_DONE_IVB << (5 * i))) {
-				intel_prepare_page_flip(dev, i);
-				intel_finish_page_flip_plane(dev, i);
-			}
-		}
-
-		/* check event from PCH */
-		if (!HAS_PCH_NOP(dev) && (de_iir & DE_PCH_EVENT_IVB)) {
-			u32 pch_iir = I915_READ(SDEIIR);
-
-			cpt_irq_handler(dev, pch_iir);
-
-			/* clear PCH hotplug event before clear CPU irq */
-			I915_WRITE(SDEIIR, pch_iir);
-		}
-
-		I915_WRITE(DEIIR, de_iir);
-		ret = IRQ_HANDLED;
+	/* check event from PCH */
+	if (de_iir & DE_PCH_EVENT_IVB) {
+		if (pch_iir & SDE_HOTPLUG_MASK_CPT)
+			queue_work(dev_priv->wq, &dev_priv->hotplug_work);
+		pch_irq_handler(dev, pch_iir);
 	}
+
+	if (pm_iir & GEN6_PM_DEFERRED_EVENTS)
+		gen6_queue_rps_work(dev_priv, pm_iir);
 
 	pm_iir = I915_READ(GEN6_PMIIR);
 	if (pm_iir) {
@@ -988,16 +907,18 @@ static irqreturn_t ironlake_irq_handler(int irq, void *arg)
 
 	/* check event from PCH */
 	if (de_iir & DE_PCH_EVENT) {
-		u32 pch_iir = I915_READ(SDEIIR);
+		if (pch_iir & hotplug_mask)
+			queue_work(dev_priv->wq, &dev_priv->hotplug_work);
+		pch_irq_handler(dev, pch_iir);
+	}
 
 		if (HAS_PCH_CPT(dev))
 			cpt_irq_handler(dev, pch_iir);
 		else
 			ibx_irq_handler(dev, pch_iir);
 
-		/* should clear PCH hotplug event before clear CPU irq */
-		I915_WRITE(SDEIIR, pch_iir);
-	}
+	if (IS_GEN6(dev) && pm_iir & GEN6_PM_DEFERRED_EVENTS)
+		gen6_queue_rps_work(dev_priv, pm_iir);
 
 	if (IS_GEN5(dev) &&  de_iir & DE_PCU_EVENT)
 		ironlake_handle_rps_change(dev);
@@ -2873,21 +2794,42 @@ static void i915_hpd_irq_setup(struct drm_device *dev)
 	u32 hotplug_en;
 
 	if (I915_HAS_HOTPLUG(dev)) {
-		hotplug_en = I915_READ(PORT_HOTPLUG_EN);
-		hotplug_en &= ~HOTPLUG_INT_EN_MASK;
-		/* Note HDMI and DP share hotplug bits */
-		/* enable bits are the same for all generations */
-		list_for_each_entry(intel_encoder, &mode_config->encoder_list, base.head)
-			if (dev_priv->hpd_stats[intel_encoder->hpd_pin].hpd_mark == HPD_ENABLED)
-				hotplug_en |= hpd_mask_i915[intel_encoder->hpd_pin];
-		/* Programming the CRT detection parameters tends
-		   to generate a spurious hotplug event about three
-		   seconds later.  So just do it once.
-		*/
-		if (IS_G4X(dev))
-			hotplug_en |= CRT_HOTPLUG_ACTIVATION_PERIOD_64;
-		hotplug_en &= ~CRT_HOTPLUG_VOLTAGE_COMPARE_MASK;
-		hotplug_en |= CRT_HOTPLUG_VOLTAGE_COMPARE_50;
+		u32 hotplug_en = I915_READ(PORT_HOTPLUG_EN);
+
+		/* Note HDMI and DP share bits */
+		if (dev_priv->hotplug_supported_mask & HDMIB_HOTPLUG_INT_STATUS)
+			hotplug_en |= HDMIB_HOTPLUG_INT_EN;
+		if (dev_priv->hotplug_supported_mask & HDMIC_HOTPLUG_INT_STATUS)
+			hotplug_en |= HDMIC_HOTPLUG_INT_EN;
+		if (dev_priv->hotplug_supported_mask & HDMID_HOTPLUG_INT_STATUS)
+			hotplug_en |= HDMID_HOTPLUG_INT_EN;
+		if (IS_G4X(dev)) {
+			if (dev_priv->hotplug_supported_mask & SDVOC_HOTPLUG_INT_STATUS_G4X)
+				hotplug_en |= SDVOC_HOTPLUG_INT_EN;
+			if (dev_priv->hotplug_supported_mask & SDVOB_HOTPLUG_INT_STATUS_G4X)
+				hotplug_en |= SDVOB_HOTPLUG_INT_EN;
+		} else if (IS_GEN4(dev)) {
+			if (dev_priv->hotplug_supported_mask & SDVOC_HOTPLUG_INT_STATUS_I965)
+				hotplug_en |= SDVOC_HOTPLUG_INT_EN;
+			if (dev_priv->hotplug_supported_mask & SDVOB_HOTPLUG_INT_STATUS_I965)
+				hotplug_en |= SDVOB_HOTPLUG_INT_EN;
+		} else {
+			if (dev_priv->hotplug_supported_mask & SDVOC_HOTPLUG_INT_STATUS_I915)
+				hotplug_en |= SDVOC_HOTPLUG_INT_EN;
+			if (dev_priv->hotplug_supported_mask & SDVOB_HOTPLUG_INT_STATUS_I915)
+				hotplug_en |= SDVOB_HOTPLUG_INT_EN;
+		}
+		if (dev_priv->hotplug_supported_mask & CRT_HOTPLUG_INT_STATUS) {
+			hotplug_en |= CRT_HOTPLUG_INT_EN;
+
+			/* Programming the CRT detection parameters tends
+			   to generate a spurious hotplug event about three
+			   seconds later.  So just do it once.
+			*/
+			if (IS_G4X(dev))
+				hotplug_en |= CRT_HOTPLUG_ACTIVATION_PERIOD_64;
+			hotplug_en |= CRT_HOTPLUG_VOLTAGE_COMPARE_50;
+		}
 
 		/* Ignore TV since it's buggy */
 		I915_WRITE(PORT_HOTPLUG_EN, hotplug_en);

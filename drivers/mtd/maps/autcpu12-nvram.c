@@ -37,8 +37,7 @@ struct autcpu12_nvram_priv {
 static int autcpu12_nvram_probe(struct platform_device *pdev)
 {
 	map_word tmp, save0, save1;
-	struct resource *res;
-	struct autcpu12_nvram_priv *priv;
+	int err;
 
 	priv = devm_kzalloc(&pdev->dev,
 			    sizeof(struct autcpu12_nvram_priv), GFP_KERNEL);
@@ -52,16 +51,7 @@ static int autcpu12_nvram_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to get memory resource\n");
 		return -ENOENT;
 	}
-
-	priv->map.bankwidth	= 4;
-	priv->map.phys		= res->start;
-	priv->map.size		= resource_size(res);
-	priv->map.virt = devm_ioremap_resource(&pdev->dev, res);
-	strcpy((char *)priv->map.name, res->name);
-	if (IS_ERR(priv->map.virt))
-		return PTR_ERR(priv->map.virt);
-
-	simple_map_init(&priv->map);
+	simple_map_init(&autcpu12_sram_map);
 
 	/*
 	 * Check for 32K/128K
@@ -71,23 +61,34 @@ static int autcpu12_nvram_probe(struct platform_device *pdev)
 	 * Read	and check result on ofs 0x0
 	 * Restore contents
 	 */
-	save0 = map_read(&priv->map, 0);
-	save1 = map_read(&priv->map, 0x10000);
+	save0 = map_read(&autcpu12_sram_map, 0);
+	save1 = map_read(&autcpu12_sram_map, 0x10000);
 	tmp.x[0] = ~save0.x[0];
-	map_write(&priv->map, tmp, 0x10000);
-	tmp = map_read(&priv->map, 0);
-	/* if we find this pattern on 0x0, we have 32K size */
-	if (!map_word_equal(&priv->map, tmp, save0)) {
-		map_write(&priv->map, save0, 0x0);
-		priv->map.size = SZ_32K;
-	} else
-		map_write(&priv->map, save1, 0x10000);
-
-	priv->mtd = do_map_probe("map_ram", &priv->map);
-	if (!priv->mtd) {
-		dev_err(&pdev->dev, "probing failed\n");
-		return -ENXIO;
+	map_write(&autcpu12_sram_map, tmp, 0x10000);
+	/* if we find this pattern on 0x0, we have 32K size
+	 * restore contents and exit
+	 */
+	tmp = map_read(&autcpu12_sram_map, 0);
+	if (!map_word_equal(&autcpu12_sram_map, tmp, save0)) {
+		map_write(&autcpu12_sram_map, save0, 0x0);
+		goto map;
 	}
+	/* We have a 128K found, restore 0x10000 and set size
+	 * to 128K
+	 */
+	map_write(&autcpu12_sram_map, save1, 0x10000);
+	autcpu12_sram_map.size = SZ_128K;
+
+map:
+	sram_mtd = do_map_probe("map_ram", &autcpu12_sram_map);
+	if (!sram_mtd) {
+		printk("NV-RAM probe failed\n");
+		err = -ENXIO;
+		goto out_ioremap;
+	}
+
+	sram_mtd->owner = THIS_MODULE;
+	sram_mtd->erasesize = 16;
 
 	priv->mtd->owner	= THIS_MODULE;
 	priv->mtd->erasesize	= 16;

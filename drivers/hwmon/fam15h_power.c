@@ -171,7 +171,7 @@ static int fam15h_power_resume(struct pci_dev *pdev)
 #define fam15h_power_resume NULL
 #endif
 
-static void fam15h_power_init_data(struct pci_dev *f4,
+static void __devinit fam15h_power_init_data(struct pci_dev *f4,
 					     struct fam15h_power_data *data)
 {
 	u32 val;
@@ -260,7 +260,7 @@ static struct pci_driver fam15h_power_driver = {
 	.name = "fam15h_power",
 	.id_table = fam15h_power_id_table,
 	.probe = fam15h_power_probe,
-	.remove = fam15h_power_remove,
+	.remove = __devexit_p(fam15h_power_remove),
 	.resume = fam15h_power_resume,
 };
 

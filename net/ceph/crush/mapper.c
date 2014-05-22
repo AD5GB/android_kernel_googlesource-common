@@ -307,6 +307,7 @@ static int crush_choose(const struct crush_map *map,
 	int item = 0;
 	int itemtype;
 	int collide, reject;
+	const unsigned int orig_tries = 5; /* attempts before we fall back to search */
 
 	dprintk("CHOOSE%s bucket %d x %d outpos %d numrep %d\n", recurse_to_leaf ? "_LEAF" : "",
 		bucket->id, x, outpos, numrep);
@@ -430,8 +431,7 @@ reject:
 					else if (collide && flocal <= map->choose_local_tries)
 						/* retry locally a few times */
 						retry_bucket = 1;
-					else if (map->choose_local_fallback_tries > 0 &&
-						 flocal <= in->size + map->choose_local_fallback_tries)
+					else if (flocal <= in->size + orig_tries)
 						/* exhaustive bucket search */
 						retry_bucket = 1;
 					else if (ftotal <= map->choose_total_tries)
@@ -473,7 +473,7 @@ reject:
  */
 int crush_do_rule(const struct crush_map *map,
 		  int ruleno, int x, int *result, int result_max,
-		  const __u32 *weight)
+		  int force, const __u32 *weight)
 {
 	int result_len;
 	int a[CRUSH_MAX_SET];
@@ -501,6 +501,27 @@ int crush_do_rule(const struct crush_map *map,
 	result_len = 0;
 	w = a;
 	o = b;
+
+	/*
+	 * determine hierarchical context of force, if any.  note
+	 * that this may or may not correspond to the specific types
+	 * referenced by the crush rule.  it will also only affect
+	 * the first descent (TAKE).
+	 */
+	if (force >= 0 &&
+	    force < map->max_devices &&
+	    map->device_parents[force] != 0 &&
+	    !is_out(map, weight, force, x)) {
+		while (1) {
+			force_context[++force_pos] = force;
+			if (force >= 0)
+				force = map->device_parents[force];
+			else
+				force = map->bucket_parents[-1-force];
+			if (force == 0)
+				break;
+		}
+	}
 
 	for (step = 0; step < rule->len; step++) {
 		struct crush_rule_step *curstep = &rule->steps[step];

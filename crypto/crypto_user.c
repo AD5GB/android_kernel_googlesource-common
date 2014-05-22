@@ -97,9 +97,9 @@ static int crypto_report_comp(struct sk_buff *skb, struct crypto_alg *alg)
 	struct crypto_report_comp rcomp;
 
 	strncpy(rcomp.type, "compression", sizeof(rcomp.type));
-	if (nla_put(skb, CRYPTOCFGA_REPORT_COMPRESS,
-		    sizeof(struct crypto_report_comp), &rcomp))
-		goto nla_put_failure;
+	NLA_PUT(skb, CRYPTOCFGA_REPORT_COMPRESS,
+		sizeof(struct crypto_report_comp), &rcomp);
+
 	return 0;
 
 nla_put_failure:
@@ -126,9 +126,9 @@ static int crypto_report_one(struct crypto_alg *alg,
 		struct crypto_report_larval rl;
 
 		strncpy(rl.type, "larval", sizeof(rl.type));
-		if (nla_put(skb, CRYPTOCFGA_REPORT_LARVAL,
-			    sizeof(struct crypto_report_larval), &rl))
-			goto nla_put_failure;
+		NLA_PUT(skb, CRYPTOCFGA_REPORT_LARVAL,
+			sizeof(struct crypto_report_larval), &rl);
+
 		goto out;
 	}
 

@@ -4151,8 +4151,9 @@ static int __init do_floppy_init(void)
 			goto out_put_disk;
 		}
 
-		disks[drive]->queue = blk_init_queue(do_fd_request, &floppy_lock);
-		if (!disks[drive]->queue) {
+		disks[dr]->queue = blk_init_queue(do_fd_request, &floppy_lock);
+		if (!disks[dr]->queue) {
+			put_disk(disks[dr]);
 			err = -ENOMEM;
 			goto out_put_disk;
 		}

@@ -1,14 +1,6 @@
 #include <asm/asm-offsets.h>
+#include <asm/page.h>
 #include <asm/thread_info.h>
-
-#define PAGE_SIZE _PAGE_SIZE
-
-/*
- * Put .bss..swapper_pg_dir as the first thing in .bss. This will
- * ensure that it has .bss alignment (64K).
- */
-#define BSS_FIRST_SECTIONS *(.bss..swapper_pg_dir)
-
 #include <asm-generic/vmlinux.lds.h>
 
 #undef mips

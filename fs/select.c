@@ -26,7 +26,6 @@
 #include <linux/fs.h>
 #include <linux/rcupdate.h>
 #include <linux/hrtimer.h>
-#include <linux/sched/rt.h>
 #include <linux/freezer.h>
 
 #include <asm/uaccess.h>
@@ -440,7 +439,7 @@ int do_select(int n, fd_set_bits *fds, struct timespec *end_time)
 			}
 
 			for (j = 0; j < BITS_PER_LONG; ++j, ++i, bit <<= 1) {
-				struct fd f;
+				int fput_needed;
 				if (i >= n)
 					break;
 				if (!(bit & all_bits))

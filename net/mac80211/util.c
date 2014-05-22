@@ -702,9 +702,6 @@ u32 ieee802_11_parse_elems_crc(const u8 *start, size_t len, bool action,
 		case WLAN_EID_ERP_INFO:
 		case WLAN_EID_EXT_SUPP_RATES:
 		case WLAN_EID_HT_CAPABILITY:
-		case WLAN_EID_HT_OPERATION:
-		case WLAN_EID_VHT_CAPABILITY:
-		case WLAN_EID_VHT_OPERATION:
 		case WLAN_EID_MESH_ID:
 		case WLAN_EID_MESH_CONFIG:
 		case WLAN_EID_PEER_MGMT:
@@ -717,12 +714,6 @@ u32 ieee802_11_parse_elems_crc(const u8 *start, size_t len, bool action,
 		case WLAN_EID_COUNTRY:
 		case WLAN_EID_PWR_CONSTRAINT:
 		case WLAN_EID_TIMEOUT_INTERVAL:
-		case WLAN_EID_SECONDARY_CHANNEL_OFFSET:
-		case WLAN_EID_WIDE_BW_CHANNEL_SWITCH:
-		/*
-		 * not listing WLAN_EID_CHANNEL_SWITCH_WRAPPER -- it seems possible
-		 * that if the content gets bigger it might be needed more than once
-		 */
 			if (test_bit(id, seen_elems)) {
 				elems->parse_error = true;
 				left -= elen;
@@ -1545,17 +1536,11 @@ int ieee80211_reconfig(struct ieee80211_local *local)
 	list_for_each_entry(sta, &local->sta_list, list) {
 		enum ieee80211_sta_state state;
 
-		if (!sta->uploaded)
-			continue;
-
-		/* AP-mode stations will be added later */
-		if (sta->sdata->vif.type == NL80211_IFTYPE_AP)
-			continue;
-
-		for (state = IEEE80211_STA_NOTEXIST;
-		     state < sta->sta_state; state++)
-			WARN_ON(drv_sta_state(local, sta->sdata, sta, state,
-					      state + 1));
+			for (state = IEEE80211_STA_NOTEXIST;
+			     state < sta->sta_state; state++)
+				WARN_ON(drv_sta_state(local, sta->sdata, sta,
+						      state, state + 1));
+		}
 	}
 	mutex_unlock(&local->sta_mtx);
 
@@ -1669,36 +1654,12 @@ int ieee80211_reconfig(struct ieee80211_local *local)
 		}
 	}
 
-	/* APs are now beaconing, add back stations */
-	mutex_lock(&local->sta_mtx);
-	list_for_each_entry(sta, &local->sta_list, list) {
-		enum ieee80211_sta_state state;
-
-		if (!sta->uploaded)
-			continue;
-
-		if (sta->sdata->vif.type != NL80211_IFTYPE_AP)
-			continue;
-
-		for (state = IEEE80211_STA_NOTEXIST;
-		     state < sta->sta_state; state++)
-			WARN_ON(drv_sta_state(local, sta->sdata, sta, state,
-					      state + 1));
-	}
-	mutex_unlock(&local->sta_mtx);
-
 	/* add back keys */
 	list_for_each_entry(sdata, &local->interfaces, list)
 		if (ieee80211_sdata_running(sdata))
 			ieee80211_enable_keys(sdata);
 
  wake_up:
-	local->in_reconfig = false;
-	barrier();
-
-	if (local->monitors == local->open_count && local->monitors > 0)
-		ieee80211_add_virtual_monitor(local);
-
 	/*
 	 * Clear the WLAN_STA_BLOCK_BA flag so new aggregation
 	 * sessions can be established after a resume.
@@ -1721,8 +1682,8 @@ int ieee80211_reconfig(struct ieee80211_local *local)
 		mutex_unlock(&local->sta_mtx);
 	}
 
-	ieee80211_wake_queues_by_reason(hw, IEEE80211_MAX_QUEUE_MAP,
-					IEEE80211_QUEUE_STOP_REASON_SUSPEND);
+	ieee80211_wake_queues_by_reason(hw,
+			IEEE80211_QUEUE_STOP_REASON_SUSPEND);
 
 	/*
 	 * If this is for hw restart things are still running.

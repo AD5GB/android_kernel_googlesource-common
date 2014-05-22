@@ -228,14 +228,6 @@ reclaimer(void *ptr)
 	u32 nsmstate;
 	struct net *net = host->net;
 
-	req = kmalloc(sizeof(*req), GFP_KERNEL);
-	if (!req) {
-		printk(KERN_ERR "lockd: reclaimer unable to alloc memory."
-				" Locks for %s won't be reclaimed!\n",
-				host->h_name);
-		return 0;
-	}
-
 	allow_signal(SIGKILL);
 
 	down_write(&host->h_rwsem);
@@ -291,6 +283,5 @@ restart:
 	/* Release host handle after use */
 	nlmclnt_release_host(host);
 	lockd_down(net);
-	kfree(req);
 	return 0;
 }

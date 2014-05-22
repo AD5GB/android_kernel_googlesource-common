@@ -50,11 +50,6 @@ hotplug_cfd(struct notifier_block *nfb, unsigned long action, void *hcpu)
 		if (!zalloc_cpumask_var_node(&cfd->cpumask_ipi, GFP_KERNEL,
 				cpu_to_node(cpu)))
 			return notifier_from_errno(-ENOMEM);
-		cfd->csd = alloc_percpu(struct call_single_data);
-		if (!cfd->csd) {
-			free_cpumask_var(cfd->cpumask);
-			return notifier_from_errno(-ENOMEM);
-		}
 		break;
 
 #ifdef CONFIG_HOTPLUG_CPU
@@ -65,7 +60,6 @@ hotplug_cfd(struct notifier_block *nfb, unsigned long action, void *hcpu)
 	case CPU_DEAD_FROZEN:
 		free_cpumask_var(cfd->cpumask);
 		free_cpumask_var(cfd->cpumask_ipi);
-		free_percpu(cfd->csd);
 		break;
 #endif
 	};
@@ -411,6 +405,13 @@ void smp_call_function_many(const struct cpumask *mask,
 		return;
 
 	/*
+	 * After we put an entry into the list, data->cpumask
+	 * may be cleared again when another CPU sends another IPI for
+	 * a SMP function call, so data->cpumask will be zero.
+	 */
+	cpumask_copy(data->cpumask_ipi, data->cpumask);
+	raw_spin_lock_irqsave(&call_function.lock, flags);
+	/*
 	 * After we put an entry into the list, cfd->cpumask may be cleared
 	 * again when another CPU sends another IPI for a SMP function call, so
 	 * cfd->cpumask will be zero.
@@ -433,7 +434,7 @@ void smp_call_function_many(const struct cpumask *mask,
 	}
 
 	/* Send a message to all CPUs in the map */
-	arch_send_call_function_ipi_mask(cfd->cpumask_ipi);
+	arch_send_call_function_ipi_mask(data->cpumask_ipi);
 
 	if (wait) {
 		for_each_cpu(cpu, cfd->cpumask) {

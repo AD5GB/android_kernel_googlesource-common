@@ -262,10 +262,12 @@ struct vm_area_struct {
 	 */
 	union {
 		struct {
-			struct rb_node rb;
-			unsigned long rb_subtree_last;
-		} linear;
-		struct list_head nonlinear;
+			struct list_head list;
+			void *parent;	/* aligns with prio_tree_node parent */
+			struct vm_area_struct *head;
+		} vm_set;
+
+		struct raw_prio_tree_node prio_tree_node;
 		const char __user *anon_name;
 	} shared;
 

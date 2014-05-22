@@ -70,10 +70,7 @@
 #include <linux/shmem_fs.h>
 #include <linux/slab.h>
 #include <linux/perf_event.h>
-#include <linux/file.h>
-#include <linux/ptrace.h>
-#include <linux/blkdev.h>
-#include <linux/elevator.h>
+#include <linux/random.h>
 
 #include <asm/io.h>
 #include <asm/bugs.h>
@@ -630,10 +627,8 @@ asmlinkage void __init start_kernel(void)
 	acpi_early_init(); /* before LAPIC and SMP init */
 	sfi_init_late();
 
-	if (efi_enabled(EFI_RUNTIME_SERVICES)) {
-		efi_late_init();
+	if (efi_enabled(EFI_RUNTIME_SERVICES))
 		efi_free_boot_services();
-	}
 
 	ftrace_init();
 
@@ -777,6 +772,7 @@ static void __init do_basic_setup(void)
 	do_ctors();
 	usermodehelper_enable();
 	do_initcalls();
+	random_int_secret_init();
 }
 
 static void __init do_pre_smp_initcalls(void)

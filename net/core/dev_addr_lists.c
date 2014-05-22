@@ -80,11 +80,20 @@ static int __hw_addr_add_ex(struct netdev_hw_addr_list *list,
 				   sync);
 }
 
-static int __hw_addr_add(struct netdev_hw_addr_list *list,
-			 const unsigned char *addr, int addr_len,
-			 unsigned char addr_type)
-{
-	return __hw_addr_add_ex(list, addr, addr_len, addr_type, false, false);
+	alloc_size = sizeof(*ha);
+	if (alloc_size < L1_CACHE_BYTES)
+		alloc_size = L1_CACHE_BYTES;
+	ha = kmalloc(alloc_size, GFP_ATOMIC);
+	if (!ha)
+		return -ENOMEM;
+	memcpy(ha->addr, addr, addr_len);
+	ha->type = addr_type;
+	ha->refcount = 1;
+	ha->global_use = global;
+	ha->synced = 0;
+	list_add_tail_rcu(&ha->list, &list->list);
+	list->count++;
+	return 0;
 }
 
 static int __hw_addr_del_entry(struct netdev_hw_addr_list *list,
@@ -244,8 +253,12 @@ int __hw_addr_sync(struct netdev_hw_addr_list *to_list,
 			err = __hw_addr_sync_one(to_list, ha, addr_len);
 			if (err)
 				break;
-		} else if (ha->refcount == 1)
-			__hw_addr_unsync_one(to_list, from_list, ha, addr_len);
+			ha->synced++;
+			ha->refcount++;
+		} else if (ha->refcount == 1) {
+			__hw_addr_del(to_list, ha->addr, addr_len, ha->type);
+			__hw_addr_del(from_list, ha->addr, addr_len, ha->type);
+		}
 	}
 	return err;
 }
@@ -258,8 +271,13 @@ void __hw_addr_unsync(struct netdev_hw_addr_list *to_list,
 	struct netdev_hw_addr *ha, *tmp;
 
 	list_for_each_entry_safe(ha, tmp, &from_list->list, list) {
-		if (ha->sync_cnt)
-			__hw_addr_unsync_one(to_list, from_list, ha, addr_len);
+		if (ha->synced) {
+			__hw_addr_del(to_list, ha->addr,
+				      addr_len, ha->type);
+			ha->synced--;
+			__hw_addr_del(from_list, ha->addr,
+				      addr_len, ha->type);
+		}
 	}
 }
 EXPORT_SYMBOL(__hw_addr_unsync);

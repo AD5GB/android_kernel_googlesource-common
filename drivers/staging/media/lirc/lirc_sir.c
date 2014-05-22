@@ -1208,14 +1208,19 @@ static int lirc_sir_probe(struct platform_device *dev)
 	return 0;
 }
 
-static int lirc_sir_remove(struct platform_device *dev)
+static int __devinit lirc_sir_probe(struct platform_device *dev)
+{
+	return 0;
+}
+
+static int __devexit lirc_sir_remove(struct platform_device *dev)
 {
 	return 0;
 }
 
 static struct platform_driver lirc_sir_driver = {
 	.probe		= lirc_sir_probe,
-	.remove		= lirc_sir_remove,
+	.remove		= __devexit_p(lirc_sir_remove),
 	.driver		= {
 		.name	= "lirc_sir",
 		.owner	= THIS_MODULE,
@@ -1228,20 +1233,23 @@ static int __init lirc_sir_init(void)
 
 	retval = platform_driver_register(&lirc_sir_driver);
 	if (retval) {
-		pr_err("Platform driver register failed!\n");
+		printk(KERN_ERR LIRC_DRIVER_NAME ": Platform driver register "
+		       "failed!\n");
 		return -ENODEV;
 	}
 
 	lirc_sir_dev = platform_device_alloc("lirc_dev", 0);
 	if (!lirc_sir_dev) {
-		pr_err("Platform device alloc failed!\n");
+		printk(KERN_ERR LIRC_DRIVER_NAME ": Platform device alloc "
+		       "failed!\n");
 		retval = -ENOMEM;
 		goto pdev_alloc_fail;
 	}
 
 	retval = platform_device_add(lirc_sir_dev);
 	if (retval) {
-		pr_err("Platform device add failed!\n");
+		printk(KERN_ERR LIRC_DRIVER_NAME ": Platform device add "
+		       "failed!\n");
 		retval = -ENODEV;
 		goto pdev_add_fail;
 	}
@@ -1274,7 +1282,7 @@ static void __exit lirc_sir_exit(void)
 	drop_port();
 	platform_device_unregister(lirc_sir_dev);
 	platform_driver_unregister(&lirc_sir_driver);
-	pr_info("Uninstalled.\n");
+	printk(KERN_INFO LIRC_DRIVER_NAME ": Uninstalled.\n");
 }
 
 module_init(lirc_sir_init);

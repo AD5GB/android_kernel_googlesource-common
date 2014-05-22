@@ -690,6 +690,23 @@ int PageHuge(struct page *page)
 }
 EXPORT_SYMBOL_GPL(PageHuge);
 
+pgoff_t __basepage_index(struct page *page)
+{
+	struct page *page_head = compound_head(page);
+	pgoff_t index = page_index(page_head);
+	unsigned long compound_idx;
+
+	if (!PageHuge(page_head))
+		return page_index(page);
+
+	if (compound_order(page_head) >= MAX_ORDER)
+		compound_idx = page_to_pfn(page) - page_to_pfn(page_head);
+	else
+		compound_idx = page - page_head;
+
+	return (index << compound_order(page_head)) + compound_idx;
+}
+
 static struct page *alloc_fresh_huge_page_node(struct hstate *h, int nid)
 {
 	struct page *page;
@@ -2468,14 +2485,25 @@ void __unmap_hugepage_range_final(struct mmu_gather *tlb,
 void unmap_hugepage_range(struct vm_area_struct *vma, unsigned long start,
 			  unsigned long end, struct page *ref_page)
 {
-	struct mm_struct *mm;
-	struct mmu_gather tlb;
-
-	mm = vma->vm_mm;
-
-	tlb_gather_mmu(&tlb, mm, 0);
-	__unmap_hugepage_range(&tlb, vma, start, end, ref_page);
-	tlb_finish_mmu(&tlb, start, end);
+	mutex_lock(&vma->vm_file->f_mapping->i_mmap_mutex);
+	__unmap_hugepage_range(vma, start, end, ref_page);
+	/*
+	 * Clear this flag so that x86's huge_pmd_share page_table_shareable
+	 * test will fail on a vma being torn down, and not grab a page table
+	 * on its way out.  We're lucky that the flag has such an appropriate
+	 * name, and can in fact be safely cleared here. We could clear it
+	 * before the __unmap_hugepage_range above, but all that's necessary
+	 * is to clear it before releasing the i_mmap_mutex below.
+	 *
+	 * This works because in the contexts this is called, the VMA is
+	 * going to be destroyed. It is not vunerable to madvise(DONTNEED)
+	 * because madvise is not supported on hugetlbfs. The same applies
+	 * for direct IO. unmap_hugepage_range() is only being called just
+	 * before free_pgtables() so clearing VM_MAYSHARE will not cause
+	 * surprises later.
+	 */
+	vma->vm_flags &= ~VM_MAYSHARE;
+	mutex_unlock(&vma->vm_file->f_mapping->i_mmap_mutex);
 }
 
 /*
@@ -2499,7 +2527,7 @@ static int unmap_ref_private(struct mm_struct *mm, struct vm_area_struct *vma,
 	address = address & huge_page_mask(h);
 	pgoff = ((address - vma->vm_start) >> PAGE_SHIFT) +
 			vma->vm_pgoff;
-	mapping = file_inode(vma->vm_file)->i_mapping;
+	mapping = vma->vm_file->f_dentry->d_inode->i_mapping;
 
 	/*
 	 * Take the mapping lock for the duration of the table walk. As
@@ -2988,8 +3016,7 @@ long follow_hugetlb_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		 * directly from any kind of swap entries.
 		 */
 		if (absent || is_swap_pte(huge_ptep_get(pte)) ||
-		    ((flags & FOLL_WRITE) &&
-		      !huge_pte_write(huge_ptep_get(pte)))) {
+		    ((flags & FOLL_WRITE) && !pte_write(huge_ptep_get(pte)))) {
 			int ret;
 
 			spin_unlock(&mm->page_table_lock);
@@ -3074,8 +3101,6 @@ unsigned long hugetlb_change_protection(struct vm_area_struct *vma,
 	 */
 	flush_tlb_range(vma, start, end);
 	mutex_unlock(&vma->vm_file->f_mapping->i_mmap_mutex);
-
-	return pages << h->order;
 }
 
 int hugetlb_reserve_pages(struct inode *inode,

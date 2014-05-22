@@ -1973,9 +1973,13 @@ static int __init thermal_init(void)
 		goto error;
 
 	result = class_register(&thermal_class);
-	if (result)
-		goto unregister_governors;
-
+	if (result) {
+		idr_destroy(&thermal_tz_idr);
+		idr_destroy(&thermal_cdev_idr);
+		mutex_destroy(&thermal_idr_lock);
+		mutex_destroy(&thermal_list_lock);
+		return result;
+	}
 	result = genetlink_init();
 	if (result)
 		goto unregister_class;

@@ -577,7 +577,8 @@ bl_read_partial_page_sync(struct page *page, struct pnfs_block_extent *be,
 	}
 
 	if (start != dirty_offset)
-		ret = bl_do_readpage_sync(page, be, start, dirty_offset - start);
+		ret = bl_do_readpage_sync(page, be, start,
+					  dirty_offset - start);
 
 	if (!ret && (dirty_offset + dirty_len < end))
 		ret = bl_do_readpage_sync(page, be, dirty_offset + dirty_len,
@@ -805,8 +806,8 @@ next_page:
 			bl_put_extent(cow_read);
 			bio = bl_submit_bio(WRITE, bio);
 			/* Get the next one */
-			be = bl_find_get_extent(BLK_LSEG2EXT(header->lseg),
-					     isect, &cow_read);
+			be = bl_find_get_extent(BLK_LSEG2EXT(wdata->lseg),
+						isect, &cow_read);
 			if (!be || !is_writable(be, isect)) {
 				header->pnfs_error = -EINVAL;
 				goto out;
@@ -835,11 +836,11 @@ next_page:
 		if (be->be_state == PNFS_BLOCK_INVALID_DATA &&
 		    !bl_is_sector_init(be->be_inval, isect)) {
 			ret = bl_read_partial_page_sync(pages[i], cow_read,
-							pg_offset, pg_len, true);
+						pg_offset, pg_len, true);
 			if (ret) {
 				dprintk("%s bl_read_partial_page_sync fail %d\n",
 					__func__, ret);
-				header->pnfs_error = ret;
+				wdata->pnfs_error = ret;
 				goto out;
 			}
 
@@ -855,8 +856,8 @@ next_page:
 			/* Expand to full page write */
 			pg_offset = 0;
 			pg_len = PAGE_CACHE_SIZE;
-		} else if  ((pg_offset & (SECTOR_SIZE - 1)) ||
-			    (pg_len & (SECTOR_SIZE - 1))){
+		} else if ((pg_offset & (SECTOR_SIZE - 1)) ||
+			    (pg_len & (SECTOR_SIZE - 1))) {
 			/* ahh, nasty case. We have to do sync full sector
 			 * read-modify-write cycles.
 			 */
@@ -867,9 +868,7 @@ next_page:
 			pg_len = round_up(saved_offset + pg_len, SECTOR_SIZE)
 				 - pg_offset;
 		}
-
-
-		bio = do_add_page_to_bio(bio, wdata->pages.npages - i, WRITE,
+		bio = do_add_page_to_bio(bio, wdata->npages - i, WRITE,
 					 isect, pages[i], be,
 					 bl_end_io_write, par,
 					 pg_offset, pg_len);

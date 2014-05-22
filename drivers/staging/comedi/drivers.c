@@ -553,17 +553,101 @@ int comedi_driver_unregister(struct comedi_driver *driver)
 		mutex_unlock(&dev->mutex);
 	}
 
-	if (comedi_drivers == driver) {
-		comedi_drivers = driver->next;
-		return 0;
-	}
+void comedi_reset_async_buf(struct comedi_async *async)
+{
+	async->buf_write_alloc_count = 0;
+	async->buf_write_count = 0;
+	async->buf_read_alloc_count = 0;
+	async->buf_read_count = 0;
 
-	for (prev = comedi_drivers; prev->next; prev = prev->next) {
-		if (prev->next == driver) {
-			prev->next = driver->next;
-			return 0;
-		}
-	}
-	return -EINVAL;
+	async->buf_write_ptr = 0;
+	async->buf_read_ptr = 0;
+
+	async->cur_chan = 0;
+	async->scan_progress = 0;
+	async->munge_chan = 0;
+	async->munge_count = 0;
+	async->munge_ptr = 0;
+
+	async->events = 0;
+}
+
+static int comedi_auto_config(struct device *hardware_device,
+			      const char *board_name, const int *options,
+			      unsigned num_options)
+{
+	struct comedi_devconfig it;
+	int minor;
+	struct comedi_device_file_info *dev_file_info;
+	int retval;
+
+	if (!comedi_autoconfig)
+		return 0;
+
+	minor = comedi_alloc_board_minor(hardware_device);
+	if (minor < 0)
+		return minor;
+
+	dev_file_info = comedi_get_device_file_info(minor);
+
+	memset(&it, 0, sizeof(it));
+	strncpy(it.board_name, board_name, COMEDI_NAMELEN);
+	it.board_name[COMEDI_NAMELEN - 1] = '\0';
+	BUG_ON(num_options > COMEDI_NDEVCONFOPTS);
+	memcpy(it.options, options, num_options * sizeof(int));
+
+	mutex_lock(&dev_file_info->device->mutex);
+	retval = comedi_device_attach(dev_file_info->device, &it);
+	mutex_unlock(&dev_file_info->device->mutex);
+
+	if (retval < 0)
+		comedi_free_board_minor(minor);
+	return retval;
+}
+
+static void comedi_auto_unconfig(struct device *hardware_device)
+{
+	int minor;
+
+	if (hardware_device == NULL)
+		return;
+	minor = comedi_find_board_minor(hardware_device);
+	if (minor < 0)
+		return;
+	BUG_ON(minor >= COMEDI_NUM_BOARD_MINORS);
+	comedi_free_board_minor(minor);
+}
+
+int comedi_pci_auto_config(struct pci_dev *pcidev, const char *board_name)
+{
+	int options[2];
+
+	/*  pci bus */
+	options[0] = pcidev->bus->number;
+	/*  pci slot */
+	options[1] = PCI_SLOT(pcidev->devfn);
+
+	return comedi_auto_config(&pcidev->dev, board_name,
+				  options, ARRAY_SIZE(options));
+}
+EXPORT_SYMBOL_GPL(comedi_pci_auto_config);
+
+void comedi_pci_auto_unconfig(struct pci_dev *pcidev)
+{
+	comedi_auto_unconfig(&pcidev->dev);
+}
+EXPORT_SYMBOL_GPL(comedi_pci_auto_unconfig);
+
+int comedi_usb_auto_config(struct usb_device *usbdev, const char *board_name)
+{
+	BUG_ON(usbdev == NULL);
+	return comedi_auto_config(&usbdev->dev, board_name, NULL, 0);
+}
+EXPORT_SYMBOL_GPL(comedi_usb_auto_config);
+
+void comedi_usb_auto_unconfig(struct usb_device *usbdev)
+{
+	BUG_ON(usbdev == NULL);
+	comedi_auto_unconfig(&usbdev->dev);
 }
 EXPORT_SYMBOL_GPL(comedi_driver_unregister);

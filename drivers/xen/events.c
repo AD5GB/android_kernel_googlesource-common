@@ -346,7 +346,7 @@ static void init_evtchn_cpu_bindings(void)
 
 	for_each_possible_cpu(i)
 		memset(per_cpu(cpu_evtchn_mask, i),
-		       (i == 0) ? ~0 : 0, sizeof(*per_cpu(cpu_evtchn_mask, i)));
+		       (i == 0) ? ~0 : 0, NR_EVENT_CHANNELS/8);
 }
 
 static inline void clear_evtchn(int port)
@@ -1329,8 +1329,8 @@ static void __xen_evtchn_do_upcall(void)
 	unsigned count;
 
 	do {
-		xen_ulong_t pending_words;
-		xen_ulong_t pending_bits;
+		unsigned long pending_words;
+		unsigned long pending_bits;
 		struct irq_desc *desc;
 
 		vcpu_info->evtchn_upcall_pending = 0;
@@ -1338,11 +1338,10 @@ static void __xen_evtchn_do_upcall(void)
 		if (__this_cpu_inc_return(xed_nesting_count) - 1)
 			goto out;
 
-		/*
-		 * Master flag must be cleared /before/ clearing
-		 * selector flag. xchg_xen_ulong must contain an
-		 * appropriate barrier.
-		 */
+#ifndef CONFIG_X86 /* No need for a barrier -- XCHG is a barrier on x86. */
+		/* Clear master flag /before/ clearing selector flag. */
+		wmb();
+#endif
 		if ((irq = per_cpu(virq_to_irq, cpu)[VIRQ_TIMER]) != -1) {
 			int evtchn = evtchn_from_irq(irq);
 			word_idx = evtchn / BITS_PER_LONG;
@@ -1354,7 +1353,7 @@ static void __xen_evtchn_do_upcall(void)
 			}
 		}
 
-		pending_words = xchg_xen_ulong(&vcpu_info->evtchn_pending_sel, 0);
+		pending_words = xchg(&vcpu_info->evtchn_pending_sel, 0);
 
 		start_word_idx = __this_cpu_read(current_word_idx);
 		start_bit_idx = __this_cpu_read(current_bit_idx);
@@ -1362,7 +1361,7 @@ static void __xen_evtchn_do_upcall(void)
 		word_idx = start_word_idx;
 
 		for (i = 0; pending_words != 0; i++) {
-			xen_ulong_t words;
+			unsigned long words;
 
 			words = MASK_LSBS(pending_words, word_idx);
 
@@ -1389,7 +1388,7 @@ static void __xen_evtchn_do_upcall(void)
 			}
 
 			do {
-				xen_ulong_t bits;
+				unsigned long bits;
 				int port;
 
 				bits = MASK_LSBS(pending_bits, bit_idx);
@@ -1442,9 +1441,7 @@ void xen_evtchn_do_upcall(struct pt_regs *regs)
 	struct pt_regs *old_regs = set_irq_regs(regs);
 
 	irq_enter();
-#ifdef CONFIG_X86
 	exit_idle();
-#endif
 
 	__xen_evtchn_do_upcall();
 

@@ -117,6 +117,7 @@ void flush_tsb_user_page(struct mm_struct *mm, unsigned long vaddr)
 	spin_unlock_irqrestore(&mm->context.lock, flags);
 }
 
+#if defined(CONFIG_SPARC64_PAGE_SIZE_8KB)
 #define HV_PGSZ_IDX_BASE	HV_PGSZ_IDX_8K
 #define HV_PGSZ_MASK_BASE	HV_PGSZ_MASK_8K
 

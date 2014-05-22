@@ -1447,9 +1447,9 @@ static int s_bPacketToWirelessUsb(struct vnt_private *pDevice, u8 byPktType,
     // 802.1H
     if (ntohs(psEthHeader->h_proto) > ETH_DATA_LEN) {
 	if (pDevice->dwDiagRefCount == 0) {
-		if ((psEthHeader->h_proto == cpu_to_be16(ETH_P_IPX)) ||
-		    (psEthHeader->h_proto == cpu_to_le16(0xF380))) {
-			memcpy((u8 *) (pbyPayloadHead),
+		if ((psEthHeader->wType == cpu_to_be16(ETH_P_IPX)) ||
+		    (psEthHeader->wType == cpu_to_le16(0xF380))) {
+			memcpy((PBYTE) (pbyPayloadHead),
 			       abySNAP_Bridgetunnel, 6);
             } else {
                 memcpy((u8 *) (pbyPayloadHead), &abySNAP_RFC1042[0], 6);
@@ -1497,7 +1497,7 @@ static int s_bPacketToWirelessUsb(struct vnt_private *pDevice, u8 byPktType,
         MIC_vInit(dwMICKey0, dwMICKey1);
         MIC_vAppend((u8 *)&(psEthHeader->h_dest[0]), 12);
         dwMIC_Priority = 0;
-        MIC_vAppend((u8 *)&dwMIC_Priority, 4);
+        MIC_vAppend((PBYTE)&dwMIC_Priority, 4);
 	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"MIC KEY: %X, %X\n",
 		dwMICKey0, dwMICKey1);
 
@@ -2317,7 +2317,7 @@ void vDMA0_tx_80211(struct vnt_private *pDevice, struct sk_buff *skb)
             MIC_vInit(dwMICKey0, dwMICKey1);
             MIC_vAppend((u8 *)&(sEthHeader.h_dest[0]), 12);
             dwMIC_Priority = 0;
-            MIC_vAppend((u8 *)&dwMIC_Priority, 4);
+            MIC_vAppend((PBYTE)&dwMIC_Priority, 4);
 		DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"DMA0_tx_8021:MIC KEY:"\
 			" %X, %X\n", dwMICKey0, dwMICKey1);
 
@@ -2521,11 +2521,11 @@ int nsDMA_tx_packet(struct vnt_private *pDevice,
     Packet_Type = skb->data[ETH_HLEN+1];
     Descriptor_type = skb->data[ETH_HLEN+1+1+2];
     Key_info = (skb->data[ETH_HLEN+1+1+2+1] << 8)|(skb->data[ETH_HLEN+1+1+2+2]);
-	if (pDevice->sTxEthHeader.h_proto == cpu_to_be16(ETH_P_PAE)) {
+	if (pDevice->sTxEthHeader.wType == cpu_to_be16(ETH_P_PAE)) {
 		/* 802.1x OR eapol-key challenge frame transfer */
 		if (((Protocol_Version == 1) || (Protocol_Version == 2)) &&
 			(Packet_Type == 3)) {
-                        bTxeapol_key = true;
+                        bTxeapol_key = TRUE;
                        if(!(Key_info & BIT3) &&  //WPA or RSN group-key challenge
 			   (Key_info & BIT8) && (Key_info & BIT9)) {    //send 2/2 key
 			  if(Descriptor_type==254) {
@@ -2670,7 +2670,7 @@ int nsDMA_tx_packet(struct vnt_private *pDevice,
         }
     }
 
-	if (pDevice->sTxEthHeader.h_proto == cpu_to_be16(ETH_P_PAE)) {
+	if (pDevice->sTxEthHeader.wType == cpu_to_be16(ETH_P_PAE)) {
 		if (pDevice->byBBType != BB_TYPE_11A) {
 			pDevice->wCurrentRate = RATE_1M;
 			pDevice->byACKRate = RATE_1M;
@@ -2696,11 +2696,11 @@ int nsDMA_tx_packet(struct vnt_private *pDevice,
         byPktType = PK_TYPE_11B;
     }
 
-    if (bNeedEncryption == true) {
-        DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"ntohs Pkt Type=%04x\n", ntohs(pDevice->sTxEthHeader.h_proto));
-	if ((pDevice->sTxEthHeader.h_proto) == cpu_to_be16(ETH_P_PAE)) {
-		bNeedEncryption = false;
-            DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Pkt Type=%04x\n", (pDevice->sTxEthHeader.h_proto));
+    if (bNeedEncryption == TRUE) {
+        DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"ntohs Pkt Type=%04x\n", ntohs(pDevice->sTxEthHeader.wType));
+	if ((pDevice->sTxEthHeader.wType) == cpu_to_be16(ETH_P_PAE)) {
+		bNeedEncryption = FALSE;
+            DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Pkt Type=%04x\n", (pDevice->sTxEthHeader.wType));
             if ((pMgmt->eCurrMode == WMAC_MODE_ESS_STA) && (pMgmt->eCurrState == WMAC_STATE_ASSOC)) {
                 if (pTransmitKey == NULL) {
                     DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Don't Find TX KEY\n");
@@ -2712,7 +2712,7 @@ int nsDMA_tx_packet(struct vnt_private *pDevice,
                     else {
 			DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Find PTK [%X]\n",
 				pTransmitKey->dwKeyIndex);
-                        bNeedEncryption = true;
+                        bNeedEncryption = TRUE;
                     }
                 }
             }
@@ -2722,7 +2722,7 @@ int nsDMA_tx_packet(struct vnt_private *pDevice,
                     (pMgmt->sNodeDBTable[uNodeIndex].dwKeyIndex & PAIRWISE_KEY)) {
 			DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Find PTK [%X]\n",
 				pTransmitKey->dwKeyIndex);
-                    bNeedEncryption = true;
+                    bNeedEncryption = TRUE;
                  }
              }
         }

@@ -1274,10 +1274,9 @@ static void snd_hda_codec_free(struct hda_codec *codec)
 {
 	if (!codec)
 		return;
-	cancel_delayed_work_sync(&codec->jackpoll_work);
 	snd_hda_jack_tbl_clear(codec);
-	free_init_pincfgs(codec);
-#ifdef CONFIG_PM
+	restore_init_pincfgs(codec);
+#ifdef CONFIG_SND_HDA_POWER_SAVE
 	cancel_delayed_work(&codec->power_work);
 	flush_workqueue(codec->bus->workq);
 #endif
@@ -1285,6 +1284,7 @@ static void snd_hda_codec_free(struct hda_codec *codec)
 	snd_array_free(&codec->mixers);
 	snd_array_free(&codec->nids);
 	snd_array_free(&codec->cvt_setups);
+	snd_array_free(&codec->conn_lists);
 	snd_array_free(&codec->spdif_out);
 	remove_conn_list(codec);
 	codec->bus->caddr_tbl[codec->addr] = NULL;

@@ -261,7 +261,9 @@ do_open_lookup(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate, stru
 	if (is_create_with_attrs(open) && open->op_acl != NULL)
 		do_set_nfs4_acl(rqstp, resfh, open->op_acl, open->op_bmval);
 
-	nfsd4_set_open_owner_reply_cache(cstate, open, resfh);
+	/* set reply cache */
+	fh_copy_shallow(&open->op_openowner->oo_owner.so_replay.rp_openfh,
+			&resfh->fh_handle);
 	accmode = NFSD_MAY_NOP;
 	if (open->op_created)
 		accmode |= NFSD_MAY_OWNER_OVERRIDE;

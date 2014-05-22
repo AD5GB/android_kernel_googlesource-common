@@ -374,8 +374,9 @@ static DEFINE_MUTEX(reg_regdb_search_mutex);
 static void reg_regdb_search(struct work_struct *work)
 {
 	struct reg_regdb_search_request *request;
-	const struct ieee80211_regdomain *curdom, *regdom = NULL;
-	int i;
+	const struct ieee80211_regdomain *curdom, *regdom;
+	int i, r;
+	bool set_reg = false;
 
 	mutex_lock(&cfg80211_mutex);
 
@@ -389,8 +390,11 @@ static void reg_regdb_search(struct work_struct *work)
 		for (i = 0; i < reg_regdb_size; i++) {
 			curdom = reg_regdb[i];
 
-			if (alpha2_equal(request->alpha2, curdom->alpha2)) {
-				regdom = reg_copy_regd(curdom);
+			if (!memcmp(request->alpha2, curdom->alpha2, 2)) {
+				r = reg_copy_regd(&regdom, curdom);
+				if (r)
+					break;
+				set_reg = true;
 				break;
 			}
 		}
@@ -399,7 +403,7 @@ static void reg_regdb_search(struct work_struct *work)
 	}
 	mutex_unlock(&reg_regdb_search_mutex);
 
-	if (!IS_ERR_OR_NULL(regdom))
+	if (set_reg)
 		set_regdom(regdom);
 
 	mutex_unlock(&cfg80211_mutex);
@@ -1427,7 +1431,7 @@ static void reg_set_request_processed(void)
 		need_more_processing = true;
 	spin_unlock(&reg_requests_lock);
 
-	if (lr->initiator == NL80211_REGDOM_SET_BY_USER)
+	if (last_request->initiator == NL80211_REGDOM_SET_BY_USER)
 		cancel_delayed_work(&reg_timeout);
 
 	if (need_more_processing)
@@ -2345,7 +2349,7 @@ int __init regulatory_init(void)
 
 	reg_regdb_size_check();
 
-	rcu_assign_pointer(cfg80211_regdomain, cfg80211_world_regdom);
+	cfg80211_regdomain = cfg80211_world_regdom;
 
 	user_alpha2[0] = '9';
 	user_alpha2[1] = '7';

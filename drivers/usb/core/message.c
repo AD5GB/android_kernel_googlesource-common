@@ -1789,14 +1789,6 @@ free_interfaces:
 		ret = -ENOMEM;
 		goto free_interfaces;
 	}
-	ret = usb_hcd_alloc_bandwidth(dev, cp, NULL, NULL);
-	if (ret < 0) {
-		if (dev->actconfig)
-			usb_enable_lpm(dev);
-		mutex_unlock(hcd->bandwidth_mutex);
-		usb_autosuspend_device(dev);
-		goto free_interfaces;
-	}
 
 	/*
 	 * Initialize the new interface structures and the

@@ -3404,6 +3404,8 @@ static int patch_conexant_auto(struct hda_codec *codec)
 		goto error;
 
 	codec->patch_ops = cx_auto_patch_ops;
+	if (spec->beep_amp)
+		snd_hda_attach_beep_device(codec, get_amp_nid_(spec->beep_amp));
 
 	/* Some laptops with Conexant chips show stalls in S3 resume,
 	 * which falls into the single-cmd mode.

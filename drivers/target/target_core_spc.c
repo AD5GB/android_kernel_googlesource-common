@@ -97,9 +97,12 @@ spc_emulate_inquiry_std(struct se_cmd *cmd, unsigned char *buf)
 
 	buf[7] = 0x2; /* CmdQue=1 */
 
-	snprintf(&buf[8], 8, "LIO-ORG");
-	snprintf(&buf[16], 16, "%s", dev->t10_wwn.model);
-	snprintf(&buf[32], 4, "%s", dev->t10_wwn.revision);
+	memcpy(&buf[8], "LIO-ORG ", 8);
+	memset(&buf[16], 0x20, 16);
+	memcpy(&buf[16], dev->se_sub_dev->t10_wwn.model,
+	       min_t(size_t, strlen(dev->se_sub_dev->t10_wwn.model), 16));
+	memcpy(&buf[32], dev->se_sub_dev->t10_wwn.revision,
+	       min_t(size_t, strlen(dev->se_sub_dev->t10_wwn.revision), 4));
 	buf[4] = 31; /* Set additional length to 31 */
 
 	return 0;
@@ -1103,30 +1106,75 @@ static sense_reason_t spc_emulate_request_sense(struct se_cmd *cmd)
 
 sense_reason_t spc_emulate_report_luns(struct se_cmd *cmd)
 {
-	struct se_dev_entry *deve;
-	struct se_session *sess = cmd->se_sess;
-	unsigned char *buf;
-	u32 lun_count = 0, offset = 8, i;
+	struct se_cmd *cmd = task->task_se_cmd;
+	struct se_device *dev = cmd->se_dev;
+	unsigned char *buf, *ptr = NULL;
+	sector_t lba;
+	int size = cmd->data_length;
+	u32 range;
+	int ret = 0;
+	int dl, bd_dl;
 
-	if (cmd->data_length < 16) {
-		pr_warn("REPORT LUNS allocation length %u too small\n",
-			cmd->data_length);
-		return TCM_INVALID_CDB_FIELD;
+	if (!dev->transport->do_discard) {
+		pr_err("UNMAP emulation not supported for: %s\n",
+				dev->transport->name);
+		cmd->scsi_sense_reason = TCM_UNSUPPORTED_SCSI_OPCODE;
+		return -ENOSYS;
 	}
 
 	buf = transport_kmap_data_sg(cmd);
 	if (!buf)
 		return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
 
-	/*
-	 * If no struct se_session pointer is present, this struct se_cmd is
-	 * coming via a target_core_mod PASSTHROUGH op, and not through
-	 * a $FABRIC_MOD.  In that case, report LUN=0 only.
-	 */
-	if (!sess) {
-		int_to_scsilun(0, (struct scsi_lun *)&buf[offset]);
-		lun_count = 1;
-		goto done;
+	dl = get_unaligned_be16(&buf[0]);
+	bd_dl = get_unaligned_be16(&buf[2]);
+
+	size = min(size - 8, bd_dl);
+	if (size / 16 > dev->se_sub_dev->se_dev_attrib.max_unmap_block_desc_count) {
+		cmd->scsi_sense_reason = TCM_INVALID_PARAMETER_LIST;
+		ret = -EINVAL;
+		goto err;
+	}
+
+	/* First UNMAP block descriptor starts at 8 byte offset */
+	ptr = &buf[8];
+	pr_debug("UNMAP: Sub: %s Using dl: %u bd_dl: %u size: %u"
+		" ptr: %p\n", dev->transport->name, dl, bd_dl, size, ptr);
+
+	while (size >= 16) {
+		lba = get_unaligned_be64(&ptr[0]);
+		range = get_unaligned_be32(&ptr[8]);
+		pr_debug("UNMAP: Using lba: %llu and range: %u\n",
+				 (unsigned long long)lba, range);
+
+		if (range > dev->se_sub_dev->se_dev_attrib.max_unmap_lba_count) {
+			cmd->scsi_sense_reason = TCM_INVALID_PARAMETER_LIST;
+			ret = -EINVAL;
+			goto err;
+		}
+
+		if (lba + range > dev->transport->get_blocks(dev) + 1) {
+			cmd->scsi_sense_reason = TCM_ADDRESS_OUT_OF_RANGE;
+			ret = -EINVAL;
+			goto err;
+		}
+
+		ret = dev->transport->do_discard(dev, lba, range);
+		if (ret < 0) {
+			pr_err("blkdev_issue_discard() failed: %d\n",
+					ret);
+			goto err;
+		}
+
+		ptr += 16;
+		size -= 16;
+	}
+
+err:
+	transport_kunmap_data_sg(cmd);
+	if (!ret) {
+		task->task_scsi_status = GOOD;
+		transport_complete_task(task, 1);
 	}
 
 	spin_lock_irq(&sess->se_node_acl->device_list_lock);
@@ -1151,13 +1199,19 @@ sense_reason_t spc_emulate_report_luns(struct se_cmd *cmd)
 	/*
 	 * See SPC3 r07, page 159.
 	 */
-done:
-	lun_count *= 8;
-	buf[0] = ((lun_count >> 24) & 0xff);
-	buf[1] = ((lun_count >> 16) & 0xff);
-	buf[2] = ((lun_count >> 8) & 0xff);
-	buf[3] = (lun_count & 0xff);
-	transport_kunmap_data_sg(cmd);
+	if (num_blocks != 0)
+		range = num_blocks;
+	else
+		range = (dev->transport->get_blocks(dev) - lba) + 1;
+
+	pr_debug("WRITE_SAME UNMAP: LBA: %llu Range: %llu\n",
+		 (unsigned long long)lba, (unsigned long long)range);
+
+	ret = dev->transport->do_discard(dev, lba, range);
+	if (ret < 0) {
+		pr_debug("blkdev_issue_discard() failed for WRITE_SAME\n");
+		return ret;
+	}
 
 	target_complete_cmd(cmd, GOOD);
 	return 0;

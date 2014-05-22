@@ -45,15 +45,10 @@
 #define IDX_TO_ASID(idx)	((idx + 1) & ~ASID_MASK)
 
 static DEFINE_RAW_SPINLOCK(cpu_asid_lock);
-static atomic64_t asid_generation = ATOMIC64_INIT(ASID_FIRST_VERSION);
-static DECLARE_BITMAP(asid_map, NUM_USER_ASIDS);
-
-DEFINE_PER_CPU(atomic64_t, active_asids);
-static DEFINE_PER_CPU(u64, reserved_asids);
-static cpumask_t tlb_flush_pending;
+unsigned int cpu_last_asid = ASID_FIRST_VERSION;
 
 #ifdef CONFIG_ARM_LPAE
-static void cpu_set_reserved_ttbr0(void)
+void cpu_set_reserved_ttbr0(void)
 {
 	unsigned long ttbl = __pa(swapper_pg_dir);
 	unsigned long ttbh = 0;
@@ -69,7 +64,23 @@ static void cpu_set_reserved_ttbr0(void)
 	isb();
 }
 #else
-static void cpu_set_reserved_ttbr0(void)
+void cpu_set_reserved_ttbr0(void)
+{
+	u32 ttb;
+	/* Copy TTBR1 into TTBR0 */
+	asm volatile(
+	"	mrc	p15, 0, %0, c2, c0, 1		@ read TTBR1\n"
+	"	mcr	p15, 0, %0, c2, c0, 0		@ set TTBR0\n"
+	: "=r" (ttb));
+	isb();
+}
+#endif
+
+/*
+ * We fork()ed a process, and we need a new context for the child
+ * to run in.
+ */
+void __init_new_context(struct task_struct *tsk, struct mm_struct *mm)
 {
 	u32 ttb;
 	/* Copy TTBR1 into TTBR0 */
@@ -85,24 +96,12 @@ static void cpu_set_reserved_ttbr0(void)
 static int contextidr_notifier(struct notifier_block *unused, unsigned long cmd,
 			       void *t)
 {
-	u32 contextidr;
-	pid_t pid;
-	struct thread_info *thread = t;
-
-	if (cmd != THREAD_NOTIFY_SWITCH)
-		return NOTIFY_DONE;
-
-	pid = task_pid_nr(thread->task) << ASID_BITS;
-	asm volatile(
-	"	mrc	p15, 0, %0, c13, c0, 1\n"
-	"	and	%0, %0, %2\n"
-	"	orr	%0, %0, %1\n"
-	"	mcr	p15, 0, %0, c13, c0, 1\n"
-	: "=r" (contextidr), "+r" (pid)
-	: "I" (~ASID_MASK));
-	isb();
-
-	return NOTIFY_OK;
+	cpu_set_reserved_ttbr0();
+	local_flush_tlb_all();
+	if (icache_is_vivt_asid_tagged()) {
+		__flush_icache_all();
+		dsb();
+	}
 }
 
 static struct notifier_block contextidr_notifier_block = {
@@ -145,12 +144,9 @@ static void flush_context(unsigned int cpu)
 
 static int is_reserved_asid(u64 asid)
 {
-	int cpu;
-	for_each_possible_cpu(cpu)
-		if (per_cpu(reserved_asids, cpu) == asid)
-			return 1;
-	return 0;
-}
+	unsigned int asid;
+	unsigned int cpu = smp_processor_id();
+	struct mm_struct *mm = current->active_mm;
 
 static u64 new_context(struct mm_struct *mm, unsigned int cpu)
 {
@@ -181,7 +177,8 @@ static u64 new_context(struct mm_struct *mm, unsigned int cpu)
 		cpumask_clear(mm_cpumask(mm));
 	}
 
-	return asid;
+	/* set the new ASID */
+	cpu_switch_mm(mm->pgd, mm);
 }
 
 void check_and_switch_context(struct mm_struct *mm, struct task_struct *tsk)

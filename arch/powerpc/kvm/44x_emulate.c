@@ -108,8 +108,41 @@ int kvmppc_core_emulate_op(struct kvm_run *run, struct kvm_vcpu *vcpu,
 		switch (get_xop(inst)) {
 
 		case XOP_MFDCR:
-			emulated = emulate_mfdcr(vcpu, rt, dcrn);
-			break;
+			dcrn = get_dcrn(inst);
+			rt = get_rt(inst);
+
+			/* The guest may access CPR0 registers to determine the timebase
+			 * frequency, and it must know the real host frequency because it
+			 * can directly access the timebase registers.
+			 *
+			 * It would be possible to emulate those accesses in userspace,
+			 * but userspace can really only figure out the end frequency.
+			 * We could decompose that into the factors that compute it, but
+			 * that's tricky math, and it's easier to just report the real
+			 * CPR0 values.
+			 */
+			switch (dcrn) {
+			case DCRN_CPR0_CONFIG_ADDR:
+				kvmppc_set_gpr(vcpu, rt, vcpu->arch.cpr0_cfgaddr);
+				break;
+			case DCRN_CPR0_CONFIG_DATA:
+				local_irq_disable();
+				mtdcr(DCRN_CPR0_CONFIG_ADDR,
+					  vcpu->arch.cpr0_cfgaddr);
+				kvmppc_set_gpr(vcpu, rt,
+					       mfdcr(DCRN_CPR0_CONFIG_DATA));
+				local_irq_enable();
+				break;
+			default:
+				run->dcr.dcrn = dcrn;
+				run->dcr.data =  0;
+				run->dcr.is_write = 0;
+				vcpu->arch.dcr_is_write = 0;
+				vcpu->arch.io_gpr = rt;
+				vcpu->arch.dcr_needed = 1;
+				kvmppc_account_exit(vcpu, DCR_EXITS);
+				emulated = EMULATE_DO_DCR;
+			}
 
 		case XOP_MFDCRX:
 			emulated = emulate_mfdcr(vcpu, rt,
@@ -117,8 +150,23 @@ int kvmppc_core_emulate_op(struct kvm_run *run, struct kvm_vcpu *vcpu,
 			break;
 
 		case XOP_MTDCR:
-			emulated = emulate_mtdcr(vcpu, rs, dcrn);
-			break;
+			dcrn = get_dcrn(inst);
+			rs = get_rs(inst);
+
+			/* emulate some access in kernel */
+			switch (dcrn) {
+			case DCRN_CPR0_CONFIG_ADDR:
+				vcpu->arch.cpr0_cfgaddr = kvmppc_get_gpr(vcpu, rs);
+				break;
+			default:
+				run->dcr.dcrn = dcrn;
+				run->dcr.data = kvmppc_get_gpr(vcpu, rs);
+				run->dcr.is_write = 1;
+				vcpu->arch.dcr_is_write = 1;
+				vcpu->arch.dcr_needed = 1;
+				kvmppc_account_exit(vcpu, DCR_EXITS);
+				emulated = EMULATE_DO_DCR;
+			}
 
 		case XOP_MTDCRX:
 			emulated = emulate_mtdcr(vcpu, rs,

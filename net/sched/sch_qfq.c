@@ -1157,9 +1157,9 @@ static void qfq_update_start(struct qfq_sched *q, struct qfq_aggregate *agg)
 			struct qfq_group *next = qfq_ffs(q, mask);
 			if (qfq_gt(roundedF, next->F)) {
 				if (qfq_gt(limit, next->F))
-					agg->S = next->F;
+					cl->S = next->F;
 				else /* preserve timestamp correctness */
-					agg->S = limit;
+					cl->S = limit;
 				return;
 			}
 		}

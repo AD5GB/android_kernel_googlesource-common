@@ -95,6 +95,27 @@ nfs4_callback_svc(void *vrqstp)
 static struct svc_rqst *
 nfs4_callback_up(struct svc_serv *serv)
 {
+	int ret;
+
+	ret = svc_create_xprt(serv, "tcp", &init_net, PF_INET,
+				nfs_callback_set_tcpport, SVC_SOCK_ANONYMOUS);
+	if (ret <= 0)
+		goto out_err;
+	nfs_callback_tcpport = ret;
+	dprintk("NFS: Callback listener port = %u (af %u)\n",
+			nfs_callback_tcpport, PF_INET);
+
+	ret = svc_create_xprt(serv, "tcp", &init_net, PF_INET6,
+				nfs_callback_set_tcpport, SVC_SOCK_ANONYMOUS);
+	if (ret > 0) {
+		nfs_callback_tcpport6 = ret;
+		dprintk("NFS: Callback listener port = %u (af %u)\n",
+				nfs_callback_tcpport6, PF_INET6);
+	} else if (ret == -EAFNOSUPPORT)
+		ret = 0;
+	else
+		goto out_err;
+
 	return svc_prepare_thread(serv, &serv->sv_pools[0], NUMA_NO_NODE);
 }
 
@@ -155,6 +176,25 @@ static struct svc_rqst *
 nfs41_callback_up(struct svc_serv *serv)
 {
 	struct svc_rqst *rqstp;
+	int ret;
+
+	/*
+	 * Create an svc_sock for the back channel service that shares the
+	 * fore channel connection.
+	 * Returns the input port (0) and sets the svc_serv bc_xprt on success
+	 */
+	ret = svc_create_xprt(serv, "tcp-bc", &init_net, PF_INET, 0,
+			      SVC_SOCK_ANONYMOUS);
+	if (ret < 0) {
+		rqstp = ERR_PTR(ret);
+		goto out;
+	}
+
+	/*
+	 * Save the svc_serv in the transport so that it can
+	 * be referenced when the session backchannel is initialized
+	 */
+	xprt->bc_serv = serv;
 
 	INIT_LIST_HEAD(&serv->sv_cb_list);
 	spin_lock_init(&serv->sv_cb_lock);
@@ -212,15 +252,21 @@ static int nfs_callback_start_svc(int minorversion, struct rpc_xprt *xprt,
 	int (*callback_svc)(void *vrqstp);
 	struct nfs_callback_data *cb_info = &nfs_callback_info[minorversion];
 	char svc_name[12];
-	int ret;
+	int ret = 0;
+	int minorversion_setup;
+	struct net *net = &init_net;
 
 	nfs_callback_bc_serv(minorversion, xprt, serv);
 
-	if (cb_info->task)
-		return 0;
+	ret = svc_bind(serv, net);
+	if (ret < 0) {
+		printk(KERN_WARNING "NFS: bind callback service failed\n");
+		goto out_err;
+	}
 
-	switch (minorversion) {
-	case 0:
+	minorversion_setup =  nfs_minorversion_callback_svc_setup(minorversion,
+					serv, xprt, &rqstp, &callback_svc);
+	if (!minorversion_setup) {
 		/* v4.0 callback setup */
 		rqstp = nfs4_callback_up(serv);
 		callback_svc = nfs4_callback_svc;
@@ -381,11 +427,13 @@ err_net:
 err_create:
 	mutex_unlock(&nfs_callback_mutex);
 	return ret;
-
-err_start:
-	nfs_callback_down_net(minorversion, serv, net);
-	dprintk("NFS: Couldn't create server thread; err = %d\n", ret);
-	goto err_net;
+out_err:
+	dprintk("NFS: Couldn't create callback socket or server thread; "
+		"err = %d\n", ret);
+	cb_info->users--;
+	if (serv)
+		svc_shutdown_net(serv, net);
+	goto out;
 }
 
 /*
@@ -400,7 +448,7 @@ void nfs_callback_down(int minorversion, struct net *net)
 	cb_info->users--;
 	if (cb_info->users == 0 && cb_info->task != NULL) {
 		kthread_stop(cb_info->task);
-		dprintk("nfs_callback_down: service stopped\n");
+		svc_shutdown_net(cb_info->serv, &init_net);
 		svc_exit_thread(cb_info->rqst);
 		dprintk("nfs_callback_down: service destroyed\n");
 		cb_info->serv = NULL;

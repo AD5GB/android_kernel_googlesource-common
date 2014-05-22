@@ -1166,26 +1166,19 @@ alloc:
 
 	if (unlikely(!new_page)) {
 		count_vm_event(THP_FAULT_FALLBACK);
-		if (is_huge_zero_pmd(orig_pmd)) {
-			ret = do_huge_pmd_wp_zero_page_fallback(mm, vma,
-					address, pmd, orig_pmd, haddr);
-		} else {
-			ret = do_huge_pmd_wp_page_fallback(mm, vma, address,
-					pmd, orig_pmd, page, haddr);
-			if (ret & VM_FAULT_OOM)
-				split_huge_page(page);
-			put_page(page);
-		}
+		ret = do_huge_pmd_wp_page_fallback(mm, vma, address,
+						   pmd, orig_pmd, page, haddr);
+		if (ret & VM_FAULT_OOM)
+			split_huge_page(page);
+		put_page(page);
 		goto out;
 	}
 	count_vm_event(THP_FAULT_ALLOC);
 
 	if (unlikely(mem_cgroup_newpage_charge(new_page, mm, GFP_KERNEL))) {
 		put_page(new_page);
-		if (page) {
-			split_huge_page(page);
-			put_page(page);
-		}
+		split_huge_page(page);
+		put_page(page);
 		ret |= VM_FAULT_OOM;
 		goto out;
 	}
@@ -2286,6 +2279,8 @@ static void collapse_huge_page(struct mm_struct *mm,
 		goto out;
 
 	vma = find_vma(mm, address);
+	if (!vma)
+		goto out;
 	hstart = (vma->vm_start + ~HPAGE_PMD_MASK) & HPAGE_PMD_MASK;
 	hend = vma->vm_end & HPAGE_PMD_MASK;
 	if (address < hstart || address + HPAGE_PMD_SIZE > hend)

@@ -949,40 +949,16 @@ static int netbk_count_requests(struct xenvif *vif,
 		return 0;
 
 	do {
-		struct xen_netif_tx_request dropped_tx = { 0 };
-
-		if (slots >= work_to_do) {
-			netdev_err(vif->dev,
-				   "Asked for %d slots but exceeds this limit\n",
-				   work_to_do);
+		if (frags >= work_to_do) {
+			netdev_err(vif->dev, "Need more frags\n");
 			netbk_fatal_tx_err(vif);
 			return -ENODATA;
 		}
 
-		/* This guest is really using too many slots and
-		 * considered malicious.
-		 */
-		if (unlikely(slots >= fatal_skb_slots)) {
-			netdev_err(vif->dev,
-				   "Malicious frontend using %d slots, threshold %u\n",
-				   slots, fatal_skb_slots);
+		if (unlikely(frags >= MAX_SKB_FRAGS)) {
+			netdev_err(vif->dev, "Too many frags\n");
 			netbk_fatal_tx_err(vif);
 			return -E2BIG;
-		}
-
-		/* Xen network protocol had implicit dependency on
-		 * MAX_SKB_FRAGS. XEN_NETBK_LEGACY_SLOTS_MAX is set to
-		 * the historical MAX_SKB_FRAGS value 18 to honor the
-		 * same behavior as before. Any packet using more than
-		 * 18 slots but less than fatal_skb_slots slots is
-		 * dropped
-		 */
-		if (!drop_err && slots >= XEN_NETBK_LEGACY_SLOTS_MAX) {
-			if (net_ratelimit())
-				netdev_dbg(vif->dev,
-					   "Too many slots (%d) exceeding limit (%d), dropping packet\n",
-					   slots, XEN_NETBK_LEGACY_SLOTS_MAX);
-			drop_err = -E2BIG;
 		}
 
 		if (drop_err)
@@ -990,29 +966,17 @@ static int netbk_count_requests(struct xenvif *vif,
 
 		memcpy(txp, RING_GET_REQUEST(&vif->tx, cons + slots),
 		       sizeof(*txp));
-
-		/* If the guest submitted a frame >= 64 KiB then
-		 * first->size overflowed and following slots will
-		 * appear to be larger than the frame.
-		 *
-		 * This cannot be fatal error as there are buggy
-		 * frontends that do this.
-		 *
-		 * Consume all slots and drop the packet.
-		 */
-		if (!drop_err && txp->size > first->size) {
-			if (net_ratelimit())
-				netdev_dbg(vif->dev,
-					   "Invalid tx request, slot size %u > remaining size %u\n",
-					   txp->size, first->size);
-			drop_err = -EIO;
+		if (txp->size > first->size) {
+			netdev_err(vif->dev, "Frag is bigger than frame.\n");
+			netbk_fatal_tx_err(vif);
+			return -EIO;
 		}
 
 		first->size -= txp->size;
 		slots++;
 
 		if (unlikely((txp->offset + txp->size) > PAGE_SIZE)) {
-			netdev_err(vif->dev, "Cross page boundary, txp->offset: %x, size: %u\n",
+			netdev_err(vif->dev, "txp->offset: %x, size: %u\n",
 				 txp->offset, txp->size);
 			netbk_fatal_tx_err(vif);
 			return -EINVAL;
@@ -1079,68 +1043,15 @@ static struct gnttab_copy *xen_netbk_get_requests(struct xen_netbk *netbk,
 		struct pending_tx_info *pending_tx_info =
 			netbk->pending_tx_info;
 
-		page = alloc_page(GFP_KERNEL|__GFP_COLD);
+		index = pending_index(netbk->pending_cons++);
+		pending_idx = netbk->pending_ring[index];
+		page = xen_netbk_alloc_page(netbk, pending_idx);
 		if (!page)
 			goto err;
 
-		dst_offset = 0;
-		first = NULL;
-		while (dst_offset < PAGE_SIZE && slot < nr_slots) {
-			gop->flags = GNTCOPY_source_gref;
-
-			gop->source.u.ref = txp->gref;
-			gop->source.domid = vif->domid;
-			gop->source.offset = txp->offset;
-
-			gop->dest.domid = DOMID_SELF;
-
-			gop->dest.offset = dst_offset;
-			gop->dest.u.gmfn = virt_to_mfn(page_address(page));
-
-			if (dst_offset + txp->size > PAGE_SIZE) {
-				/* This page can only merge a portion
-				 * of tx request. Do not increment any
-				 * pointer / counter here. The txp
-				 * will be dealt with in future
-				 * rounds, eventually hitting the
-				 * `else` branch.
-				 */
-				gop->len = PAGE_SIZE - dst_offset;
-				txp->offset += gop->len;
-				txp->size -= gop->len;
-				dst_offset += gop->len; /* quit loop */
-			} else {
-				/* This tx request can be merged in the page */
-				gop->len = txp->size;
-				dst_offset += gop->len;
-
-				index = pending_index(netbk->pending_cons++);
-
-				pending_idx = netbk->pending_ring[index];
-
-				memcpy(&pending_tx_info[pending_idx].req, txp,
-				       sizeof(*txp));
-				xenvif_get(vif);
-
-				pending_tx_info[pending_idx].vif = vif;
-
-				/* Poison these fields, corresponding
-				 * fields for head tx req will be set
-				 * to correct values after the loop.
-				 */
-				netbk->mmap_pages[pending_idx] = (void *)(~0UL);
-				pending_tx_info[pending_idx].head =
-					INVALID_PENDING_RING_IDX;
-
-				if (!first) {
-					first = &pending_tx_info[pending_idx];
-					start_idx = index;
-					head_idx = pending_idx;
-				}
-
-				txp++;
-				slot++;
-			}
+		gop->source.u.ref = txp->gref;
+		gop->source.domid = vif->domid;
+		gop->source.offset = txp->offset;
 
 			gop++;
 		}
@@ -1162,6 +1073,17 @@ err:
 		xen_netbk_idx_release(netbk,
 				frag_get_pending_idx(&frags[shinfo->nr_frags]),
 				XEN_NETIF_RSP_ERROR);
+	}
+	/* The head too, if necessary. */
+	if (start)
+		xen_netbk_idx_release(netbk, pending_idx, XEN_NETIF_RSP_ERROR);
+
+	return gop;
+err:
+	/* Unwind, freeing all pages and sending error responses. */
+	while (i-- > start) {
+		xen_netbk_idx_release(netbk, frag_get_pending_idx(&frags[i]),
+				      XEN_NETIF_RSP_ERROR);
 	}
 	/* The head too, if necessary. */
 	if (start)
@@ -1192,7 +1114,6 @@ static int xen_netbk_tx_check_gop(struct xen_netbk *netbk,
 
 	for (i = start; i < nr_frags; i++) {
 		int j, newerr;
-		pending_ring_idx_t head;
 
 		pending_idx = frag_get_pending_idx(&shinfo->frags[i]);
 		tx_info = &netbk->pending_tx_info[pending_idx];
@@ -1721,8 +1642,7 @@ static void xen_netbk_idx_release(struct xen_netbk *netbk, u16 pending_idx,
 		pending_ring_idx_t idx = pending_index(head);
 		u16 info_idx = netbk->pending_ring[idx];
 
-		pending_tx_info = &netbk->pending_tx_info[info_idx];
-		make_tx_response(vif, &pending_tx_info->req, status);
+	make_tx_response(vif, &pending_tx_info->req, status);
 
 		/* Setting any number other than
 		 * INVALID_PENDING_RING_IDX indicates this slot is

@@ -26,7 +26,6 @@
 #include <linux/suspend.h>
 #include <linux/fault-inject.h>
 #include <linux/random.h>
-#include <linux/slab.h>
 #include <linux/wakelock.h>
 
 #include <trace/events/mmc.h>
@@ -544,7 +543,7 @@ struct mmc_async_req *mmc_start_req(struct mmc_host *host,
 		trace_mmc_blk_rw_start(areq->mrq->cmd->opcode,
 				       areq->mrq->cmd->arg,
 				       areq->mrq->data);
-		start_err = __mmc_start_data_req(host, areq->mrq);
+		start_err = __mmc_start_req(host, areq->mrq);
 	}
 
 	if (host->areq)
@@ -1854,7 +1853,6 @@ static int mmc_do_erase(struct mmc_card *card, unsigned int from,
 {
 	struct mmc_command cmd = {0};
 	unsigned int qty = 0;
-	unsigned long timeout;
 	unsigned int fr, nr;
 	int err;
 
@@ -2494,7 +2492,6 @@ void mmc_stop_host(struct mmc_host *host)
 	spin_unlock_irqrestore(&host->lock, flags);
 #endif
 
-	host->rescan_disable = 1;
 	if (cancel_delayed_work_sync(&host->detect))
 		wake_unlock(&host->detect_wake_lock);
 	mmc_flush_scheduled_work();
@@ -2698,6 +2695,10 @@ int mmc_suspend_host(struct mmc_host *host)
 		wake_unlock(&host->detect_wake_lock);
 	mmc_flush_scheduled_work();
 
+	if (cancel_delayed_work(&host->detect))
+		wake_unlock(&host->detect_wake_lock);
+	mmc_flush_scheduled_work();
+
 	mmc_bus_get(host);
 	if (host->bus_ops && !host->bus_dead) {
 		if (host->bus_ops->suspend) {
@@ -2853,23 +2854,6 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 	return 0;
 }
 #endif
-
-/**
- * mmc_init_context_info() - init synchronization context
- * @host: mmc host
- *
- * Init struct context_info needed to implement asynchronous
- * request mechanism, used by mmc core, host driver and mmc requests
- * supplier.
- */
-void mmc_init_context_info(struct mmc_host *host)
-{
-	spin_lock_init(&host->context_info.lock);
-	host->context_info.is_new_req = false;
-	host->context_info.is_done_rcv = false;
-	host->context_info.is_waiting_last_req = false;
-	init_waitqueue_head(&host->context_info.wait);
-}
 
 #ifdef CONFIG_MMC_EMBEDDED_SDIO
 void mmc_set_embedded_sdio_data(struct mmc_host *host,

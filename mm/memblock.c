@@ -244,10 +244,10 @@ static int __init_memblock memblock_double_array(struct memblock_type *type,
 						new_alloc_size, PAGE_SIZE);
 		if (!addr && new_area_size)
 			addr = memblock_find_in_range(0,
-				min(new_area_start, memblock.current_limit),
-				new_alloc_size, PAGE_SIZE);
+					min(new_area_start, memblock.current_limit),
+					new_alloc_size, PAGE_SIZE);
 
-		new_array = addr ? __va(addr) : NULL;
+		new_array = addr ? __va(addr) : 0;
 	}
 	if (!addr) {
 		pr_err("memblock: Failed to double %s array from %ld to %ld entries !\n",
@@ -270,16 +270,17 @@ static int __init_memblock memblock_double_array(struct memblock_type *type,
 	type->regions = new_array;
 	type->max <<= 1;
 
-	/* Free old array. We needn't free it if the array is the static one */
+	/* Free old array. We needn't free it if the array is the
+	 * static one
+	 */
 	if (*in_slab)
 		kfree(old_array);
 	else if (old_array != memblock_memory_init_regions &&
 		 old_array != memblock_reserved_init_regions)
 		memblock_free(__pa(old_array), old_alloc_size);
 
-	/*
-	 * Reserve the new array if that comes from the memblock.  Otherwise, we
-	 * needn't do it
+	/* Reserve the new array if that comes from the memblock.
+	 * Otherwise, we needn't do it
 	 */
 	if (!use_slab)
 		BUG_ON(memblock_reserve(addr, new_alloc_size));

@@ -269,17 +269,6 @@ struct mtp_device_status {
 	__le16	wCode;
 };
 
-struct mtp_data_header {
-	/* length of packet, including this header */
-	__le32	length;
-	/* container type (2 for data packet) */
-	__le16	type;
-	/* MTP command code */
-	__le16	command;
-	/* MTP transaction ID */
-	__le32	transaction_id;
-};
-
 /* temporary variable used between mtp_open() and mtp_gadget_bind() */
 static struct mtp_dev *_mtp_dev;
 
@@ -466,11 +455,10 @@ static ssize_t mtp_read(struct file *fp, char __user *buf,
 	struct mtp_dev *dev = fp->private_data;
 	struct usb_composite_dev *cdev = dev->cdev;
 	struct usb_request *req;
-	ssize_t r = count;
-	unsigned xfer;
+	int r = count, xfer;
 	int ret = 0;
 
-	DBG(cdev, "mtp_read(%zu)\n", count);
+	DBG(cdev, "mtp_read(%d)\n", count);
 
 	if (count > MTP_BULK_BUFFER_SIZE)
 		return -EINVAL;
@@ -534,7 +522,7 @@ done:
 		dev->state = STATE_READY;
 	spin_unlock_irq(&dev->lock);
 
-	DBG(cdev, "mtp_read returning %zd\n", r);
+	DBG(cdev, "mtp_read returning %d\n", r);
 	return r;
 }
 
@@ -544,12 +532,11 @@ static ssize_t mtp_write(struct file *fp, const char __user *buf,
 	struct mtp_dev *dev = fp->private_data;
 	struct usb_composite_dev *cdev = dev->cdev;
 	struct usb_request *req = 0;
-	ssize_t r = count;
-	unsigned xfer;
+	int r = count, xfer;
 	int sendZLP = 0;
 	int ret;
 
-	DBG(cdev, "mtp_write(%zu)\n", count);
+	DBG(cdev, "mtp_write(%d)\n", count);
 
 	spin_lock_irq(&dev->lock);
 	if (dev->state == STATE_CANCELED) {
@@ -626,7 +613,7 @@ static ssize_t mtp_write(struct file *fp, const char __user *buf,
 		dev->state = STATE_READY;
 	spin_unlock_irq(&dev->lock);
 
-	DBG(cdev, "mtp_write returning %zd\n", r);
+	DBG(cdev, "mtp_write returning %d\n", r);
 	return r;
 }
 
@@ -825,7 +812,7 @@ static int mtp_send_event(struct mtp_dev *dev, struct mtp_event *event)
 	int ret;
 	int length = event->length;
 
-	DBG(dev->cdev, "mtp_send_event(%zu)\n", event->length);
+	DBG(dev->cdev, "mtp_send_event(%d)\n", event->length);
 
 	if (length < 0 || length > INTR_BUFFER_SIZE)
 		return -EINVAL;
@@ -1216,10 +1203,10 @@ static int mtp_bind_config(struct usb_configuration *c, bool ptp_config)
 	dev->function.name = "mtp";
 	dev->function.strings = mtp_strings;
 	if (ptp_config) {
-		dev->function.fs_descriptors = fs_ptp_descs;
+		dev->function.descriptors = fs_ptp_descs;
 		dev->function.hs_descriptors = hs_ptp_descs;
 	} else {
-		dev->function.fs_descriptors = fs_mtp_descs;
+		dev->function.descriptors = fs_mtp_descs;
 		dev->function.hs_descriptors = hs_mtp_descs;
 	}
 	dev->function.bind = mtp_function_bind;

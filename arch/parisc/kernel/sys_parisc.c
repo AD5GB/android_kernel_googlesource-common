@@ -66,13 +66,20 @@ static unsigned long get_shared_area(struct address_space *mapping,
 {
 	struct vm_unmapped_area_info info;
 
-	info.flags = 0;
-	info.length = len;
-	info.low_limit = PAGE_ALIGN(addr);
-	info.high_limit = TASK_SIZE;
-	info.align_mask = PAGE_MASK & (SHMLBA - 1);
-	info.align_offset = (get_offset(mapping) + pgoff) << PAGE_SHIFT;
-	return vm_unmapped_area(&info);
+	offset = (offset + (pgoff << PAGE_SHIFT)) & 0x3FF000;
+
+	addr = DCACHE_ALIGN(addr - offset) + offset;
+
+	for (vma = find_vma(current->mm, addr); ; vma = vma->vm_next) {
+		/* At this point:  (!vma || addr < vma->vm_end). */
+		if (TASK_SIZE - len < addr)
+			return -ENOMEM;
+		if (!vma || addr + len <= vma->vm_start)
+			return addr;
+		addr = DCACHE_ALIGN(vma->vm_end - offset) + offset;
+		if (addr < vma->vm_end) /* handle wraparound */
+			return -ENOMEM;
+	}
 }
 
 unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,

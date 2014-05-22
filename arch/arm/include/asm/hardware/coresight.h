@@ -175,7 +175,7 @@
 #define etm_lock(t, id) \
 	do { etm_writel((t), (id), 0, CSMR_LOCKACCESS); } while (0)
 #define etm_unlock(t, id) \
-	do { etm_writel((t), (id), CS_LAR_KEY, CSMR_LOCKACCESS); } while (0)
+	do { etm_writel((t), (id), UNLOCK_MAGIC, CSMR_LOCKACCESS); } while (0)
 
 #define etb_lock(t) do { etb_writel((t), 0, CSMR_LOCKACCESS); } while (0)
 #define etb_unlock(t) \

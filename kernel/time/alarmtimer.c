@@ -181,7 +181,7 @@ static enum hrtimer_restart alarmtimer_fired(struct hrtimer *timer)
 	int restart = ALARMTIMER_NORESTART;
 
 	spin_lock_irqsave(&base->lock, flags);
-	alarmtimer_dequeue(base, alarm);
+	alarmtimer_remove(base, alarm);
 	spin_unlock_irqrestore(&base->lock, flags);
 
 	if (alarm->function)
@@ -267,7 +267,7 @@ static int alarmtimer_suspend(struct device *dev)
 	/* Set alarm, if in the past reject suspend briefly to handle */
 	ret = rtc_timer_start(rtc, &rtctimer, now, ktime_set(0, 0));
 	if (ret < 0)
-		__pm_wakeup_event(ws, MSEC_PER_SEC);
+		__pm_wakeup_event(ws, 1 * MSEC_PER_SEC);
 	return ret;
 }
 #else
@@ -371,7 +371,7 @@ int alarm_try_to_cancel(struct alarm *alarm)
 	spin_lock_irqsave(&base->lock, flags);
 	ret = hrtimer_try_to_cancel(&alarm->timer);
 	if (ret >= 0)
-		alarmtimer_dequeue(base, alarm);
+		alarmtimer_remove(base, alarm);
 	spin_unlock_irqrestore(&base->lock, flags);
 	return ret;
 }

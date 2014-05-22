@@ -737,8 +737,13 @@ validate_exec_list(struct drm_i915_gem_exec_object2 *exec,
 		char __user *ptr = to_user_ptr(exec[i].relocs_ptr);
 		int length; /* limited by fault_in_pages_readable() */
 
-		if (exec[i].flags & __EXEC_OBJECT_UNKNOWN_FLAGS)
+		/* First check for malicious input causing overflow in
+		 * the worst case where we need to allocate the entire
+		 * relocation tree as a single array.
+		 */
+		if (exec[i].relocation_count > relocs_max - relocs_total)
 			return -EINVAL;
+		relocs_total += exec[i].relocation_count;
 
 		/* First check for malicious input causing overflow in
 		 * the worst case where we need to allocate the entire

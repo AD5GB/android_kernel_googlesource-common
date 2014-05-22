@@ -3340,14 +3340,8 @@ static int peer_abort_intr(struct c4iw_dev *dev, struct sk_buff *skb)
 
 	/*
 	 * Wake up any threads in rdma_init() or rdma_fini().
-	 * However, if we are on MPAv2 and want to retry with MPAv1
-	 * then, don't wake up yet.
 	 */
-	if (mpa_rev == 2 && !ep->tried_with_mpa_v1) {
-		if (ep->com.state != MPA_REQ_SENT)
-			c4iw_wake_up(&ep->com.wr_wait, -ECONNRESET);
-	} else
-		c4iw_wake_up(&ep->com.wr_wait, -ECONNRESET);
+	c4iw_wake_up(&ep->com.wr_wait, -ECONNRESET);
 	sched(dev, skb);
 	return 0;
 }

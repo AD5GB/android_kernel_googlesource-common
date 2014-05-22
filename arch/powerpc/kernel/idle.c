@@ -53,30 +53,22 @@ void arch_cpu_idle_dead(void)
 }
 #endif
 
-void arch_cpu_idle(void)
+static void do_nothing(void *unused)
 {
-	ppc64_runlatch_off();
+}
 
-	if (ppc_md.power_save) {
-		ppc_md.power_save();
-		/*
-		 * Some power_save functions return with
-		 * interrupts enabled, some don't.
-		 */
-		if (irqs_disabled())
-			local_irq_enable();
-	} else {
-		local_irq_enable();
-		/*
-		 * Go into low thread priority and possibly
-		 * low power mode.
-		 */
-		HMT_low();
-		HMT_very_low();
-	}
-
-	HMT_medium();
-	ppc64_runlatch_on();
+/*
+ * cpu_idle_wait - Used to ensure that all the CPUs come out of the old
+ * idle loop and start using the new idle loop.
+ * Required while changing idle handler on SMP systems.
+ * Caller must have changed idle handler to the new value before the call.
+ * This window may be larger on shared systems.
+ */
+void cpu_idle_wait(void)
+{
+	smp_mb();
+	/* kick all the CPUs so that they exit out of pm_idle */
+	smp_call_function(do_nothing, NULL, 1);
 }
 
 int powersave_nap;

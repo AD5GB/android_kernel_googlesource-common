@@ -78,6 +78,12 @@ static int _usbctrl_vendorreq_async_write(struct usb_device *udev, u8 request,
 		return -ENOMEM;
 	}
 
+	databuf = kmalloc(databuf_maxlen, GFP_ATOMIC);
+	if (!databuf) {
+		kfree(dr);
+		return -ENOMEM;
+	}
+
 	urb = usb_alloc_urb(0, GFP_ATOMIC);
 	if (!urb) {
 		kfree(databuf);
@@ -224,7 +230,7 @@ static void _usb_writeN_sync(struct rtl_priv *rtlpriv, u32 addr, void *data,
 	u8 *buffer;
 
 	wvalue = (u16)(addr & 0x0000ffff);
-	buffer = kmemdup(data, len, GFP_ATOMIC);
+	buffer = kmalloc(len, GFP_ATOMIC);
 	if (!buffer)
 		return;
 	usb_control_msg(udev, pipe, request, reqtype, wvalue,
@@ -544,57 +550,7 @@ static void _rtl_rx_pre_process(struct ieee80211_hw *hw, struct sk_buff *skb)
 	while (!skb_queue_empty(&rx_queue)) {
 		_skb = skb_dequeue(&rx_queue);
 		_rtl_usb_rx_process_agg(hw, _skb);
-		ieee80211_rx(hw, _skb);
-	}
-}
-
-#define __RX_SKB_MAX_QUEUED	32
-
-static void _rtl_rx_work(unsigned long param)
-{
-	struct rtl_usb *rtlusb = (struct rtl_usb *)param;
-	struct ieee80211_hw *hw = usb_get_intfdata(rtlusb->intf);
-	struct sk_buff *skb;
-
-	while ((skb = skb_dequeue(&rtlusb->rx_queue))) {
-		if (unlikely(IS_USB_STOP(rtlusb))) {
-			dev_kfree_skb_any(skb);
-			continue;
-		}
-
-		if (likely(!rtlusb->usb_rx_segregate_hdl)) {
-			_rtl_usb_rx_process_noagg(hw, skb);
-		} else {
-			/* TO DO */
-			_rtl_rx_pre_process(hw, skb);
-			pr_err("rx agg not supported\n");
-		}
-	}
-}
-
-static unsigned int _rtl_rx_get_padding(struct ieee80211_hdr *hdr,
-					unsigned int len)
-{
-	unsigned int padding = 0;
-
-	/* make function no-op when possible */
-	if (NET_IP_ALIGN == 0 || len < sizeof(*hdr))
-		return 0;
-
-	/* alignment calculation as in lbtf_rx() / carl9170_rx_copy_data() */
-	/* TODO: deduplicate common code, define helper function instead? */
-
-	if (ieee80211_is_data_qos(hdr->frame_control)) {
-		u8 *qc = ieee80211_get_qos_ctl(hdr);
-
-		padding ^= NET_IP_ALIGN;
-
-		/* Input might be invalid, avoid accessing memory outside
-		 * the buffer.
-		 */
-		if ((unsigned long)qc - (unsigned long)hdr < len &&
-		    *qc & IEEE80211_QOS_CTL_A_MSDU_PRESENT)
-			padding ^= NET_IP_ALIGN;
+		ieee80211_rx_irqsafe(hw, _skb);
 	}
 
 	if (ieee80211_has_a4(hdr->frame_control))
@@ -1068,8 +1024,6 @@ int rtl_usb_probe(struct usb_interface *intf,
 
 	/* this spin lock must be initialized early */
 	spin_lock_init(&rtlpriv->locks.usb_lock);
-	INIT_WORK(&rtlpriv->works.fill_h2c_cmd,
-		  rtl_fill_h2c_cmd_work_callback);
 
 	rtlpriv->usb_data_index = 0;
 	init_completion(&rtlpriv->firmware_loading_complete);

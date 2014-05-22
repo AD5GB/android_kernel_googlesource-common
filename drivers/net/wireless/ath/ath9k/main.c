@@ -575,7 +575,26 @@ void ath9k_queue_reset(struct ath_softc *sc, enum ath_reset_type type)
 
 void ath_reset_work(struct work_struct *work)
 {
-	struct ath_softc *sc = container_of(work, struct ath_softc, hw_reset_work);
+	struct ath_softc *sc = container_of(work, struct ath_softc,
+					    hw_pll_work.work);
+	u32 pll_sqsum;
+
+	/*
+	 * ensure that the PLL WAR is executed only
+	 * after the STA is associated (or) if the
+	 * beaconing had started in interfaces that
+	 * uses beacons.
+	 */
+	if (!(sc->sc_flags & SC_OP_BEACONS))
+		return;
+
+	if (AR_SREV_9485(sc->sc_ah)) {
+
+		ath9k_ps_wakeup(sc);
+		pll_sqsum = ar9003_get_pll_sqsum_dvc(sc->sc_ah);
+		ath9k_ps_restore(sc);
+
+		ath_hw_pll_rx_hang_check(sc, pll_sqsum);
 
 	ath_reset(sc);
 }
@@ -969,6 +988,30 @@ static int ath9k_add_interface(struct ieee80211_hw *hw,
 	struct ath_common *common = ath9k_hw_common(ah);
 
 	mutex_lock(&sc->mutex);
+
+	switch (vif->type) {
+	case NL80211_IFTYPE_STATION:
+	case NL80211_IFTYPE_WDS:
+	case NL80211_IFTYPE_ADHOC:
+	case NL80211_IFTYPE_AP:
+	case NL80211_IFTYPE_MESH_POINT:
+		break;
+	default:
+		ath_err(common, "Interface type %d not yet supported\n",
+			vif->type);
+		ret = -EOPNOTSUPP;
+		goto out;
+	}
+
+	if (ath9k_uses_beacons(vif->type)) {
+		if (sc->nbcnvifs >= ATH_BCBUF) {
+			ath_err(common, "Not enough beacon buffers when adding"
+				" new interface of type: %i\n",
+				vif->type);
+			ret = -ENOBUFS;
+			goto out;
+		}
+	}
 
 	ath_dbg(common, CONFIG, "Attach a VIF of type: %d\n", vif->type);
 	sc->nvifs++;

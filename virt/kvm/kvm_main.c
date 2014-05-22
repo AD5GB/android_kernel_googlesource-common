@@ -748,7 +748,7 @@ int __kvm_set_memory_region(struct kvm *kvm,
 	int r;
 	gfn_t base_gfn;
 	unsigned long npages;
-	struct kvm_memory_slot *slot;
+	struct kvm_memory_slot *memslot, *slot;
 	struct kvm_memory_slot old, new;
 	struct kvm_memslots *slots = NULL, *old_memslots;
 	enum kvm_mr_change change;
@@ -803,31 +803,14 @@ int __kvm_set_memory_region(struct kvm *kvm,
 			    ((new.flags ^ old.flags) & KVM_MEM_READONLY))
 				goto out;
 
-			if (base_gfn != old.base_gfn)
-				change = KVM_MR_MOVE;
-			else if (new.flags != old.flags)
-				change = KVM_MR_FLAGS_ONLY;
-			else { /* Nothing to change. */
-				r = 0;
-				goto out;
-			}
-		}
-	} else if (old.npages) {
-		change = KVM_MR_DELETE;
-	} else /* Modify a non-existent slot: disallowed. */
-		goto out;
-
-	if ((change == KVM_MR_CREATE) || (change == KVM_MR_MOVE)) {
-		/* Check for overlaps */
-		r = -EEXIST;
-		kvm_for_each_memslot(slot, kvm->memslots) {
-			if ((slot->id >= KVM_USER_MEM_SLOTS) ||
-			    (slot->id == mem->slot))
-				continue;
-			if (!((base_gfn + npages <= slot->base_gfn) ||
-			      (base_gfn >= slot->base_gfn + slot->npages)))
-				goto out;
-		}
+	/* Check for overlaps */
+	r = -EEXIST;
+	kvm_for_each_memslot(slot, kvm->memslots) {
+		if (slot->id >= KVM_MEMORY_SLOTS || slot == memslot)
+			continue;
+		if (!((base_gfn + npages <= slot->base_gfn) ||
+		      (base_gfn >= slot->base_gfn + slot->npages)))
+			goto out_free;
 	}
 
 	/* Free page dirty bitmap if unneeded */

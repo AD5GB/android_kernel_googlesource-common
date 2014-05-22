@@ -117,8 +117,8 @@ static void bcma_pmu_workarounds(struct bcma_drv_cc *cc)
 					    ~BCMA_CCTRL_4313_12MA_LED_DRIVE,
 					    BCMA_CCTRL_4313_12MA_LED_DRIVE);
 		break;
-	case BCMA_CHIP_ID_BCM4331:
-	case BCMA_CHIP_ID_BCM43431:
+	case 0x4331:
+	case 43431:
 		/* Ext PA lines must be enabled for tx on BCM4331 */
 		bcma_chipco_bcm4331_ext_pa_lines_ctl(cc, true);
 		break;

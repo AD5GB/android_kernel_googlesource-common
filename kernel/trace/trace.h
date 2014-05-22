@@ -362,11 +362,9 @@ struct tracer {
 						u32 mask, int set);
 	struct tracer		*next;
 	struct tracer_flags	*flags;
-	bool			print_max;
+	int			print_max;
+	int			use_max_tr;
 	bool			enabled;
-#ifdef CONFIG_TRACER_MAX_TRACE
-	bool			use_max_tr;
-#endif
 };
 
 
@@ -860,9 +858,7 @@ enum trace_iterator_flags {
 	TRACE_ITER_OVERWRITE		= 0x200000,
 	TRACE_ITER_STOP_ON_FREE		= 0x400000,
 	TRACE_ITER_IRQ_INFO		= 0x800000,
-	TRACE_ITER_MARKERS		= 0x1000000,
-	TRACE_ITER_FUNCTION		= 0x2000000,
-	TRACE_ITER_TGID 		= 0x4000000,
+	TRACE_ITER_TGID 		= 0x1000000,
 };
 
 /*
@@ -1029,21 +1025,8 @@ extern struct list_head ftrace_events;
 extern const char *__start___trace_bprintk_fmt[];
 extern const char *__stop___trace_bprintk_fmt[];
 
-void trace_printk_init_buffers(void);
-void trace_printk_start_comm(void);
 int trace_keep_overwrite(struct tracer *tracer, u32 mask, int set);
-int set_tracer_flag(struct trace_array *tr, unsigned int mask, int enabled);
-
-/*
- * Normal trace_printk() and friends allocates special buffers
- * to do the manipulation, as well as saves the print formats
- * into sections to display. But the trace infrastructure wants
- * to use these without the added overhead at the price of being
- * a bit slower (used mainly for warnings, where we don't care
- * about performance). The internal_trace_puts() is for such
- * a purpose.
- */
-#define internal_trace_puts(str) __trace_puts(_THIS_IP_, str, strlen(str))
+int set_tracer_flag(unsigned int mask, int enabled);
 
 #undef FTRACE_ENTRY
 #define FTRACE_ENTRY(call, struct_name, id, tstruct, print, filter)	\

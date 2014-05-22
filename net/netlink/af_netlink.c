@@ -338,8 +338,9 @@ static int netlink_mmap(struct file *file, struct socket *sock,
 		expected += ring->pg_vec_len * ring->pg_vec_pages * PAGE_SIZE;
 	}
 
-	if (expected == 0)
-		goto out;
+#define nl_deref_protected(X) rcu_dereference_protected(X, lockdep_is_held(&nl_table_lock));
+
+static ATOMIC_NOTIFIER_HEAD(netlink_chain);
 
 	size = vma->vm_end - vma->vm_start;
 	if (size != expected)
@@ -2071,8 +2072,8 @@ static int netlink_sendmsg(struct kiocb *kiocb, struct socket *sock,
 		dst_portid = addr->nl_pid;
 		dst_group = ffs(addr->nl_groups);
 		err =  -EPERM;
-		if ((dst_group || dst_portid) &&
-		    !netlink_capable(sock, NL_CFG_F_NONROOT_SEND))
+		if ((dst_group || dst_pid) &&
+		    !netlink_capable(sock, NL_NONROOT_SEND))
 			goto out;
 	} else {
 		dst_portid = nlk->dst_portid;
@@ -2463,7 +2464,7 @@ static int netlink_dump(struct sock *sk)
 	mutex_unlock(nlk->cb_mutex);
 
 	module_put(cb->module);
-	netlink_consume_callback(cb);
+	netlink_destroy_callback(cb);
 	return 0;
 
 errout_skb:
@@ -2873,7 +2874,7 @@ static void __init netlink_add_usersock_entry(void)
 	rcu_assign_pointer(nl_table[NETLINK_USERSOCK].listeners, listeners);
 	nl_table[NETLINK_USERSOCK].module = THIS_MODULE;
 	nl_table[NETLINK_USERSOCK].registered = 1;
-	nl_table[NETLINK_USERSOCK].flags = NL_CFG_F_NONROOT_SEND;
+	nl_table[NETLINK_USERSOCK].nl_nonroot = NL_NONROOT_SEND;
 
 	netlink_table_ungrab();
 }

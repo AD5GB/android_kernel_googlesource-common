@@ -505,7 +505,7 @@ static int atmel_lcdfb_check_var(struct fb_var_screeninfo *var,
 		break;
 	case 16:
 		/* Older SOCs use IBGR:555 rather than BGR:565. */
-		if (sinfo->config->have_intensity_bit)
+		if (sinfo->have_intensity_bit)
 			var->green.length = 5;
 		else
 			var->green.length = 6;
@@ -765,7 +765,7 @@ static int atmel_lcdfb_setcolreg(unsigned int regno, unsigned int red,
 
 	case FB_VISUAL_PSEUDOCOLOR:
 		if (regno < 256) {
-			if (sinfo->config->have_intensity_bit) {
+			if (sinfo->have_intensity_bit) {
 				/* old style I+BGR:555 */
 				val  = ((red   >> 11) & 0x001f);
 				val |= ((green >>  6) & 0x03e0);
@@ -953,9 +953,10 @@ static int __init atmel_lcdfb_probe(struct platform_device *pdev)
 	}
 	sinfo->info = info;
 	sinfo->pdev = pdev;
-	sinfo->config = atmel_lcdfb_get_config(pdev);
-	if (!sinfo->config)
-		goto free_info;
+	if (cpu_is_at91sam9261() || cpu_is_at91sam9263() ||
+							cpu_is_at91sam9rl()) {
+		sinfo->have_intensity_bit = true;
+	}
 
 	strcpy(info->fix.id, sinfo->pdev->name);
 	info->flags = ATMEL_LCDFB_FBINFO_DEFAULT;

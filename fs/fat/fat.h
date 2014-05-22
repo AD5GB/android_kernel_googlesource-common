@@ -81,12 +81,12 @@ struct msdos_sb_info {
 	unsigned int free_clusters;  /* -1 if undefined */
 	unsigned int free_clus_valid; /* is free_clusters valid? */
 	struct fat_mount_options options;
-	struct nls_table *nls_disk;   /* Codepage used on disk */
-	struct nls_table *nls_io;     /* Charset used for input and display */
-	const void *dir_ops;	      /* Opaque; default directory operations */
-	int dir_per_block;	      /* dir entries per block */
-	int dir_per_block_bits;	      /* log2(dir_per_block) */
-	unsigned long vol_id;         /* volume ID */
+	struct nls_table *nls_disk;  /* Codepage used on disk */
+	struct nls_table *nls_io;    /* Charset used for input and display */
+	const void *dir_ops;		     /* Opaque; default directory operations */
+	int dir_per_block;	     /* dir entries per block */
+	int dir_per_block_bits;	     /* log2(dir_per_block) */
+	unsigned long vol_id;        /* volume ID */
 
 	int fatent_shift;
 	struct fatent_operations *fatent_ops;

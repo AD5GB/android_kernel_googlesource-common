@@ -1756,7 +1756,7 @@ refind_writable:
 		if (OPEN_FMODE(open_file->f_flags) & FMODE_WRITE) {
 			if (!open_file->invalidHandle) {
 				/* found a good writable file */
-				cifsFileInfo_get_locked(open_file);
+				cifsFileInfo_get(open_file);
 				spin_unlock(&cifs_file_list_lock);
 				return open_file;
 			} else {
@@ -1773,7 +1773,7 @@ refind_writable:
 
 	if (inv_file) {
 		any_available = false;
-		cifsFileInfo_get_locked(inv_file);
+		cifsFileInfo_get(inv_file);
 	}
 
 	spin_unlock(&cifs_file_list_lock);

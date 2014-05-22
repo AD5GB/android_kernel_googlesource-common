@@ -75,12 +75,11 @@ enum chips { ltc2974, ltc2978, ltc3880, ltc3883 };
 
 struct ltc2978_data {
 	enum chips id;
-	u16 vin_min, vin_max;
-	u16 temp_min[LTC2974_NUM_PAGES], temp_max[LTC2974_NUM_PAGES];
-	u16 vout_min[LTC2978_NUM_PAGES], vout_max[LTC2978_NUM_PAGES];
-	u16 iout_min[LTC2974_NUM_PAGES], iout_max[LTC2974_NUM_PAGES];
-	u16 iin_max;
-	u16 temp2_max;
+	int vin_min, vin_max;
+	int temp_min, temp_max[2];
+	int vout_min[8], vout_max[8];
+	int iout_max[2];
+	int temp2_max;
 	struct pmbus_driver_info info;
 };
 
@@ -332,7 +331,6 @@ static int ltc2978_write_word_data(struct i2c_client *client, int page,
 		break;
 	case PMBUS_VIRT_RESET_IOUT_HISTORY:
 		data->iout_max[page] = 0x7c00;
-		data->iout_min[page] = 0xfbff;
 		ret = ltc2978_clear_peaks(client, page, data->id);
 		break;
 	case PMBUS_VIRT_RESET_TEMP2_HISTORY:
@@ -350,7 +348,7 @@ static int ltc2978_write_word_data(struct i2c_client *client, int page,
 		ret = ltc2978_clear_peaks(client, page, data->id);
 		break;
 	case PMBUS_VIRT_RESET_TEMP_HISTORY:
-		data->temp_min[page] = 0x7bff;
+		data->temp_min = 0x7bff;
 		data->temp_max[page] = 0x7c00;
 		ret = ltc2978_clear_peaks(client, page, data->id);
 		break;
@@ -413,31 +411,12 @@ static int ltc2978_probe(struct i2c_client *client,
 
 	data->vin_min = 0x7bff;
 	data->vin_max = 0x7c00;
-	for (i = 0; i < ARRAY_SIZE(data->vout_min); i++)
-		data->vout_min[i] = 0xffff;
-	for (i = 0; i < ARRAY_SIZE(data->iout_min); i++)
-		data->iout_min[i] = 0xfbff;
-	for (i = 0; i < ARRAY_SIZE(data->iout_max); i++)
-		data->iout_max[i] = 0x7c00;
-	for (i = 0; i < ARRAY_SIZE(data->temp_min); i++)
-		data->temp_min[i] = 0x7bff;
+	data->temp_min = 0x7bff;
 	for (i = 0; i < ARRAY_SIZE(data->temp_max); i++)
 		data->temp_max[i] = 0x7c00;
 	data->temp2_max = 0x7c00;
 
 	switch (data->id) {
-	case ltc2974:
-		info->read_word_data = ltc2974_read_word_data;
-		info->pages = LTC2974_NUM_PAGES;
-		info->func[0] = PMBUS_HAVE_VIN | PMBUS_HAVE_STATUS_INPUT
-		  | PMBUS_HAVE_TEMP2;
-		for (i = 0; i < info->pages; i++) {
-			info->func[i] |= PMBUS_HAVE_VOUT
-			  | PMBUS_HAVE_STATUS_VOUT | PMBUS_HAVE_POUT
-			  | PMBUS_HAVE_TEMP | PMBUS_HAVE_STATUS_TEMP
-			  | PMBUS_HAVE_IOUT | PMBUS_HAVE_STATUS_IOUT;
-		}
-		break;
 	case ltc2978:
 		info->read_word_data = ltc2978_read_word_data;
 		info->pages = LTC2978_NUM_PAGES;
@@ -462,20 +441,15 @@ static int ltc2978_probe(struct i2c_client *client,
 		  | PMBUS_HAVE_IOUT | PMBUS_HAVE_STATUS_IOUT
 		  | PMBUS_HAVE_POUT
 		  | PMBUS_HAVE_TEMP | PMBUS_HAVE_STATUS_TEMP;
-		break;
-	case ltc3883:
-		info->read_word_data = ltc3883_read_word_data;
-		info->pages = LTC3883_NUM_PAGES;
-		info->func[0] = PMBUS_HAVE_VIN | PMBUS_HAVE_IIN
-		  | PMBUS_HAVE_STATUS_INPUT
-		  | PMBUS_HAVE_VOUT | PMBUS_HAVE_STATUS_VOUT
-		  | PMBUS_HAVE_IOUT | PMBUS_HAVE_STATUS_IOUT
-		  | PMBUS_HAVE_PIN | PMBUS_HAVE_POUT | PMBUS_HAVE_TEMP
-		  | PMBUS_HAVE_TEMP2 | PMBUS_HAVE_STATUS_TEMP;
+		data->iout_max[0] = 0x7c00;
+		data->iout_max[1] = 0x7c00;
 		break;
 	default:
 		return -ENODEV;
 	}
+	for (i = 0; i < info->pages; i++)
+		data->vout_min[i] = 0xffff;
+
 	return pmbus_do_probe(client, id, info);
 }
 

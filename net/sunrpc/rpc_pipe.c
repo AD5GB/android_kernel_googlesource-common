@@ -1163,8 +1163,8 @@ static void rpc_kill_sb(struct super_block *sb)
 	}
 	sn->pipefs_sb = NULL;
 	mutex_unlock(&sn->pipefs_sb_lock);
-	dprintk("RPC:       sending pipefs UMOUNT notification for net %p%s\n",
-		net, NET_NAME(net));
+	dprintk("RPC:	sending pipefs UMOUNT notification for net %p%s\n", net,
+								NET_NAME(net));
 	blocking_notifier_call_chain(&rpc_pipefs_notifier_list,
 					   RPC_PIPEFS_UMOUNT,
 					   sb);

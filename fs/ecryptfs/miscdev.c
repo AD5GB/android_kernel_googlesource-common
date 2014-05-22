@@ -44,6 +44,13 @@ ecryptfs_miscdev_poll(struct file *file, poll_table *pt)
 	struct ecryptfs_daemon *daemon = file->private_data;
 	unsigned int mask = 0;
 
+	mutex_lock(&ecryptfs_daemon_hash_mux);
+	/* TODO: Just use file->private_data? */
+	rc = ecryptfs_find_daemon_by_euid(&daemon, euid, current_user_ns());
+	if (rc || !daemon) {
+		mutex_unlock(&ecryptfs_daemon_hash_mux);
+		return -EINVAL;
+	}
 	mutex_lock(&daemon->mux);
 	if (daemon->flags & ECRYPTFS_DAEMON_ZOMBIE) {
 		printk(KERN_WARNING "%s: Attempt to poll on zombified "
@@ -122,6 +129,10 @@ ecryptfs_miscdev_release(struct inode *inode, struct file *file)
 	struct ecryptfs_daemon *daemon = file->private_data;
 	int rc;
 
+	mutex_lock(&ecryptfs_daemon_hash_mux);
+	rc = ecryptfs_find_daemon_by_euid(&daemon, euid, current_user_ns());
+	if (rc || !daemon)
+		daemon = file->private_data;
 	mutex_lock(&daemon->mux);
 	BUG_ON(!(daemon->flags & ECRYPTFS_DAEMON_MISCDEV_OPEN));
 	daemon->flags &= ~ECRYPTFS_DAEMON_MISCDEV_OPEN;
@@ -235,7 +246,19 @@ ecryptfs_miscdev_read(struct file *file, char __user *buf, size_t count,
 	size_t total_length;
 	int rc;
 
+	mutex_lock(&ecryptfs_daemon_hash_mux);
+	/* TODO: Just use file->private_data? */
+	rc = ecryptfs_find_daemon_by_euid(&daemon, euid, current_user_ns());
+	if (rc || !daemon) {
+		mutex_unlock(&ecryptfs_daemon_hash_mux);
+		return -EINVAL;
+	}
 	mutex_lock(&daemon->mux);
+	if (task_pid(current) != daemon->pid) {
+		mutex_unlock(&daemon->mux);
+		mutex_unlock(&ecryptfs_daemon_hash_mux);
+		return -EPERM;
+	}
 	if (daemon->flags & ECRYPTFS_DAEMON_ZOMBIE) {
 		rc = 0;
 		printk(KERN_WARNING "%s: Attempt to read from zombified "

@@ -1010,13 +1010,14 @@ static int flexcan_probe(struct platform_device *pdev)
 	int err, irq;
 	u32 clock_freq = 0;
 
-	pinctrl = devm_pinctrl_get_select_default(&pdev->dev);
-	if (IS_ERR(pinctrl))
-		return PTR_ERR(pinctrl);
+	if (pdev->dev.of_node) {
+		const __be32 *clock_freq_p;
 
-	if (pdev->dev.of_node)
-		of_property_read_u32(pdev->dev.of_node,
-						"clock-frequency", &clock_freq);
+		clock_freq_p = of_get_property(pdev->dev.of_node,
+						"clock-frequency", NULL);
+		if (clock_freq_p)
+			clock_freq = be32_to_cpup(clock_freq_p);
+	}
 
 	if (!clock_freq) {
 		clk_ipg = devm_clk_get(&pdev->dev, "ipg");

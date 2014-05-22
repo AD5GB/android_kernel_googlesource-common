@@ -1113,5 +1113,332 @@ void snd_usb_handle_sync_urb(struct snd_usb_endpoint *ep,
 		 */
 		ep->freqshift = INT_MIN;
 	}
+	urb->number_of_packets = ctx->packets;
+	urb->transfer_buffer_length = offs * stride;
+	memset(urb->transfer_buffer,
+	       runtime->format == SNDRV_PCM_FORMAT_U8 ? 0x80 : 0,
+	       offs * stride);
+	return 0;
+}
+
+/*
+ * prepare urb for playback data pipe
+ *
+ * Since a URB can handle only a single linear buffer, we must use double
+ * buffering when the data to be transferred overflows the buffer boundary.
+ * To avoid inconsistencies when updating hwptr_done, we use double buffering
+ * for all URBs.
+ */
+static int prepare_playback_urb(struct snd_usb_substream *subs,
+				struct snd_pcm_runtime *runtime,
+				struct urb *urb)
+{
+	int i, stride;
+	unsigned int counts, frames, bytes;
+	unsigned long flags;
+	int period_elapsed = 0;
+	struct snd_urb_ctx *ctx = urb->context;
+
+	stride = runtime->frame_bits >> 3;
+
+	frames = 0;
+	urb->dev = ctx->subs->dev; /* we need to set this at each time */
+	urb->number_of_packets = 0;
+	spin_lock_irqsave(&subs->lock, flags);
+	for (i = 0; i < ctx->packets; i++) {
+		counts = snd_usb_audio_next_packet_size(subs);
+		/* set up descriptor */
+		urb->iso_frame_desc[i].offset = frames * stride;
+		urb->iso_frame_desc[i].length = counts * stride;
+		frames += counts;
+		urb->number_of_packets++;
+		subs->transfer_done += counts;
+		if (subs->transfer_done >= runtime->period_size) {
+			subs->transfer_done -= runtime->period_size;
+			period_elapsed = 1;
+			if (subs->fmt_type == UAC_FORMAT_TYPE_II) {
+				if (subs->transfer_done > 0) {
+					/* FIXME: fill-max mode is not
+					 * supported yet */
+					frames -= subs->transfer_done;
+					counts -= subs->transfer_done;
+					urb->iso_frame_desc[i].length =
+						counts * stride;
+					subs->transfer_done = 0;
+				}
+				i++;
+				if (i < ctx->packets) {
+					/* add a transfer delimiter */
+					urb->iso_frame_desc[i].offset =
+						frames * stride;
+					urb->iso_frame_desc[i].length = 0;
+					urb->number_of_packets++;
+				}
+				break;
+			}
+		}
+		if (period_elapsed) /* finish at the period boundary */
+			break;
+	}
+	bytes = frames * stride;
+	if (subs->hwptr_done + bytes > runtime->buffer_size * stride) {
+		/* err, the transferred area goes over buffer boundary. */
+		unsigned int bytes1 =
+			runtime->buffer_size * stride - subs->hwptr_done;
+		memcpy(urb->transfer_buffer,
+		       runtime->dma_area + subs->hwptr_done, bytes1);
+		memcpy(urb->transfer_buffer + bytes1,
+		       runtime->dma_area, bytes - bytes1);
+	} else {
+		memcpy(urb->transfer_buffer,
+		       runtime->dma_area + subs->hwptr_done, bytes);
+	}
+	subs->hwptr_done += bytes;
+	if (subs->hwptr_done >= runtime->buffer_size * stride)
+		subs->hwptr_done -= runtime->buffer_size * stride;
+
+	/* update delay with exact number of samples queued */
+	runtime->delay = subs->last_delay;
+	runtime->delay += frames;
+	subs->last_delay = runtime->delay;
+
+	/* realign last_frame_number */
+	subs->last_frame_number = usb_get_current_frame_number(subs->dev);
+	subs->last_frame_number &= 0xFF; /* keep 8 LSBs */
+
+	spin_unlock_irqrestore(&subs->lock, flags);
+	urb->transfer_buffer_length = bytes;
+	if (period_elapsed)
+		snd_pcm_period_elapsed(subs->pcm_substream);
+	return 0;
+}
+
+/*
+ * process after playback data complete
+ * - decrease the delay count again
+ */
+static int retire_playback_urb(struct snd_usb_substream *subs,
+			       struct snd_pcm_runtime *runtime,
+			       struct urb *urb)
+{
+	unsigned long flags;
+	int stride = runtime->frame_bits >> 3;
+	int processed = urb->transfer_buffer_length / stride;
+	int est_delay;
+
+	spin_lock_irqsave(&subs->lock, flags);
+
+	est_delay = snd_usb_pcm_delay(subs, runtime->rate);
+	/* update delay with exact number of samples played */
+	if (processed > subs->last_delay)
+		subs->last_delay = 0;
+	else
+		subs->last_delay -= processed;
+	runtime->delay = subs->last_delay;
+
+	/*
+	 * Report when delay estimate is off by more than 2ms.
+	 * The error should be lower than 2ms since the estimate relies
+	 * on two reads of a counter updated every ms.
+	 */
+	if (abs(est_delay - subs->last_delay) * 1000 > runtime->rate * 2)
+		snd_printk(KERN_DEBUG "delay: estimated %d, actual %d\n",
+			est_delay, subs->last_delay);
+
+	spin_unlock_irqrestore(&subs->lock, flags);
+	return 0;
+}
+
+static const char *usb_error_string(int err)
+{
+	switch (err) {
+	case -ENODEV:
+		return "no device";
+	case -ENOENT:
+		return "endpoint not enabled";
+	case -EPIPE:
+		return "endpoint stalled";
+	case -ENOSPC:
+		return "not enough bandwidth";
+	case -ESHUTDOWN:
+		return "device disabled";
+	case -EHOSTUNREACH:
+		return "device suspended";
+	case -EINVAL:
+	case -EAGAIN:
+	case -EFBIG:
+	case -EMSGSIZE:
+		return "internal error";
+	default:
+		return "unknown error";
+	}
+}
+
+/*
+ * set up and start data/sync urbs
+ */
+static int start_urbs(struct snd_usb_substream *subs, struct snd_pcm_runtime *runtime)
+{
+	unsigned int i;
+	int err;
+
+	if (subs->stream->chip->shutdown)
+		return -EBADFD;
+
+	for (i = 0; i < subs->nurbs; i++) {
+		if (snd_BUG_ON(!subs->dataurb[i].urb))
+			return -EINVAL;
+		if (subs->ops.prepare(subs, runtime, subs->dataurb[i].urb) < 0) {
+			snd_printk(KERN_ERR "cannot prepare datapipe for urb %d\n", i);
+			goto __error;
+		}
+	}
+	if (subs->syncpipe) {
+		for (i = 0; i < SYNC_URBS; i++) {
+			if (snd_BUG_ON(!subs->syncurb[i].urb))
+				return -EINVAL;
+			if (subs->ops.prepare_sync(subs, runtime, subs->syncurb[i].urb) < 0) {
+				snd_printk(KERN_ERR "cannot prepare syncpipe for urb %d\n", i);
+				goto __error;
+			}
+		}
+	}
+
+	subs->active_mask = 0;
+	subs->unlink_mask = 0;
+	subs->running = 1;
+	for (i = 0; i < subs->nurbs; i++) {
+		err = usb_submit_urb(subs->dataurb[i].urb, GFP_ATOMIC);
+		if (err < 0) {
+			snd_printk(KERN_ERR "cannot submit datapipe "
+				   "for urb %d, error %d: %s\n",
+				   i, err, usb_error_string(err));
+			goto __error;
+		}
+		set_bit(i, &subs->active_mask);
+	}
+	if (subs->syncpipe) {
+		for (i = 0; i < SYNC_URBS; i++) {
+			err = usb_submit_urb(subs->syncurb[i].urb, GFP_ATOMIC);
+			if (err < 0) {
+				snd_printk(KERN_ERR "cannot submit syncpipe "
+					   "for urb %d, error %d: %s\n",
+					   i, err, usb_error_string(err));
+				goto __error;
+			}
+			set_bit(i + 16, &subs->active_mask);
+		}
+	}
+	return 0;
+
+ __error:
+	// snd_pcm_stop(subs->pcm_substream, SNDRV_PCM_STATE_XRUN);
+	deactivate_urbs(subs, 0, 0);
+	return -EPIPE;
+}
+
+
+/*
+ */
+static struct snd_urb_ops audio_urb_ops[2] = {
+	{
+		.prepare =	prepare_nodata_playback_urb,
+		.retire =	retire_playback_urb,
+		.prepare_sync =	prepare_playback_sync_urb,
+		.retire_sync =	retire_playback_sync_urb,
+	},
+	{
+		.prepare =	prepare_capture_urb,
+		.retire =	retire_capture_urb,
+		.prepare_sync =	prepare_capture_sync_urb,
+		.retire_sync =	retire_capture_sync_urb,
+	},
+};
+
+/*
+ * initialize the substream instance.
+ */
+
+void snd_usb_init_substream(struct snd_usb_stream *as,
+			    int stream, struct audioformat *fp)
+{
+	struct snd_usb_substream *subs = &as->substream[stream];
+
+	INIT_LIST_HEAD(&subs->fmt_list);
+	spin_lock_init(&subs->lock);
+
+	subs->stream = as;
+	subs->direction = stream;
+	subs->dev = as->chip->dev;
+	subs->txfr_quirk = as->chip->txfr_quirk;
+	subs->ops = audio_urb_ops[stream];
+	subs->speed = snd_usb_get_speed(subs->dev);
+	if (subs->speed >= USB_SPEED_HIGH)
+		subs->ops.prepare_sync = prepare_capture_sync_urb_hs;
+
+	snd_usb_set_pcm_ops(as->pcm, stream);
+
+	list_add_tail(&fp->list, &subs->fmt_list);
+	subs->formats |= fp->formats;
+	subs->endpoint = fp->endpoint;
+	subs->num_formats++;
+	subs->fmt_type = fp->fmt_type;
+}
+
+int snd_usb_substream_playback_trigger(struct snd_pcm_substream *substream, int cmd)
+{
+	struct snd_usb_substream *subs = substream->runtime->private_data;
+
+	switch (cmd) {
+	case SNDRV_PCM_TRIGGER_START:
+	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
+		subs->ops.prepare = prepare_playback_urb;
+		return 0;
+	case SNDRV_PCM_TRIGGER_STOP:
+		return deactivate_urbs(subs, 0, 0);
+	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
+		subs->ops.prepare = prepare_nodata_playback_urb;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+int snd_usb_substream_capture_trigger(struct snd_pcm_substream *substream, int cmd)
+{
+	struct snd_usb_substream *subs = substream->runtime->private_data;
+
+	switch (cmd) {
+	case SNDRV_PCM_TRIGGER_START:
+		subs->ops.retire = retire_capture_urb;
+		return start_urbs(subs, substream->runtime);
+	case SNDRV_PCM_TRIGGER_STOP:
+		return deactivate_urbs(subs, 0, 0);
+	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
+		subs->ops.retire = retire_paused_capture_urb;
+		return 0;
+	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
+		subs->ops.retire = retire_capture_urb;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+int snd_usb_substream_prepare(struct snd_usb_substream *subs,
+			      struct snd_pcm_runtime *runtime)
+{
+	/* clear urbs (to be sure) */
+	deactivate_urbs(subs, 0, 1);
+	wait_clear_urbs(subs);
+
+	/* for playback, submit the URBs now; otherwise, the first hwptr_done
+	 * updates for all URBs would happen at the same time when starting */
+	if (subs->direction == SNDRV_PCM_STREAM_PLAYBACK) {
+		subs->ops.prepare = prepare_nodata_playback_urb;
+		return start_urbs(subs, runtime);
+	}
+
+	return 0;
 }
 

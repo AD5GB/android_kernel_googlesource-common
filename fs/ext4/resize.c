@@ -478,18 +478,9 @@ static int setup_new_flex_group_blocks(struct super_block *sb,
 		gdblocks = ext4_bg_num_gdb(sb, group);
 		start = ext4_group_first_block_no(sb, group);
 
-		if (meta_bg == 0 && !ext4_bg_has_super(sb, group))
+		if (!ext4_bg_has_super(sb, group))
 			goto handle_itb;
 
-		if (meta_bg == 1) {
-			ext4_group_t first_group;
-			first_group = ext4_meta_bg_first_group(sb, group);
-			if (first_group != group + 1 &&
-			    first_group != group + EXT4_DESC_PER_BLOCK(sb) - 1)
-				goto handle_itb;
-		}
-
-		block = start + ext4_bg_has_super(sb, group);
 		/* Copy all of the GDT blocks into the backup in this group */
 		for (j = 0; j < gdblocks; j++, block++) {
 			struct buffer_head *gdb;
@@ -1288,7 +1279,7 @@ static void ext4_update_super(struct super_block *sb,
 	struct ext4_new_group_data *group_data = flex_gd->groups;
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
 	struct ext4_super_block *es = sbi->s_es;
-	int i;
+	int i, ret;
 
 	BUG_ON(flex_gd->count == 0 || group_data == NULL);
 	/*
@@ -1448,12 +1439,9 @@ exit_journal:
 		int gdb_num = group / EXT4_DESC_PER_BLOCK(sb);
 		int gdb_num_end = ((group + flex_gd->count - 1) /
 				   EXT4_DESC_PER_BLOCK(sb));
-		int meta_bg = EXT4_HAS_INCOMPAT_FEATURE(sb,
-				EXT4_FEATURE_INCOMPAT_META_BG);
-		sector_t old_gdb = 0;
 
 		update_backups(sb, sbi->s_sbh->b_blocknr, (char *)es,
-			       sizeof(struct ext4_super_block), 0);
+			       sizeof(struct ext4_super_block));
 		for (; gdb_num <= gdb_num_end; gdb_num++) {
 			struct buffer_head *gdb_bh;
 
@@ -1881,7 +1869,7 @@ retry:
 		/* Nothing need to do */
 		return 0;
 
-	n_group = ext4_get_group_number(sb, n_blocks_count - 1);
+	ext4_get_group_no_and_offset(sb, n_blocks_count - 1, &n_group, &offset);
 	if (n_group > (0xFFFFFFFFUL / EXT4_INODES_PER_GROUP(sb))) {
 		ext4_warning(sb, "resize would cause inodes_count overflow");
 		return -EINVAL;
@@ -1965,13 +1953,6 @@ retry:
 	 */
 	while (ext4_setup_next_flex_gd(sb, flex_gd, n_blocks_count,
 					      flexbg_size)) {
-		if (jiffies - last_update_time > HZ * 10) {
-			if (last_update_time)
-				ext4_msg(sb, KERN_INFO,
-					 "resized to %llu blocks",
-					 ext4_blocks_count(es));
-			last_update_time = jiffies;
-		}
 		if (ext4_alloc_group_tables(sb, flex_gd, flexbg_size) != 0)
 			break;
 		err = ext4_flex_group_add(sb, resize_inode, flex_gd);

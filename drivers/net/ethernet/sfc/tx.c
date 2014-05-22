@@ -95,56 +95,6 @@ unsigned int efx_tx_max_skb_descs(struct efx_nic *efx)
 	return max_descs;
 }
 
-/* Get partner of a TX queue, seen as part of the same net core queue */
-static struct efx_tx_queue *efx_tx_queue_partner(struct efx_tx_queue *tx_queue)
-{
-	if (tx_queue->queue & EFX_TXQ_TYPE_OFFLOAD)
-		return tx_queue - EFX_TXQ_TYPE_OFFLOAD;
-	else
-		return tx_queue + EFX_TXQ_TYPE_OFFLOAD;
-}
-
-static void efx_tx_maybe_stop_queue(struct efx_tx_queue *txq1)
-{
-	/* We need to consider both queues that the net core sees as one */
-	struct efx_tx_queue *txq2 = efx_tx_queue_partner(txq1);
-	struct efx_nic *efx = txq1->efx;
-	unsigned int fill_level;
-
-	fill_level = max(txq1->insert_count - txq1->old_read_count,
-			 txq2->insert_count - txq2->old_read_count);
-	if (likely(fill_level < efx->txq_stop_thresh))
-		return;
-
-	/* We used the stale old_read_count above, which gives us a
-	 * pessimistic estimate of the fill level (which may even
-	 * validly be >= efx->txq_entries).  Now try again using
-	 * read_count (more likely to be a cache miss).
-	 *
-	 * If we read read_count and then conditionally stop the
-	 * queue, it is possible for the completion path to race with
-	 * us and complete all outstanding descriptors in the middle,
-	 * after which there will be no more completions to wake it.
-	 * Therefore we stop the queue first, then read read_count
-	 * (with a memory barrier to ensure the ordering), then
-	 * restart the queue if the fill level turns out to be low
-	 * enough.
-	 */
-	netif_tx_stop_queue(txq1->core_txq);
-	smp_mb();
-	txq1->old_read_count = ACCESS_ONCE(txq1->read_count);
-	txq2->old_read_count = ACCESS_ONCE(txq2->read_count);
-
-	fill_level = max(txq1->insert_count - txq1->old_read_count,
-			 txq2->insert_count - txq2->old_read_count);
-	EFX_BUG_ON_PARANOID(fill_level >= efx->txq_entries);
-	if (likely(fill_level < efx->txq_stop_thresh)) {
-		smp_mb();
-		if (likely(!efx->loopback_selftest))
-			netif_tx_start_queue(txq1->core_txq);
-	}
-}
-
 /*
  * Add a socket buffer to a TX queue
  *

@@ -2453,6 +2453,17 @@ static int dev_gso_segment(struct sk_buff *skb, netdev_features_t features)
 	return 0;
 }
 
+static bool can_checksum_protocol(netdev_features_t features, __be16 protocol)
+{
+	return ((features & NETIF_F_GEN_CSUM) ||
+		((features & NETIF_F_V4_CSUM) &&
+		 protocol == htons(ETH_P_IP)) ||
+		((features & NETIF_F_V6_CSUM) &&
+		 protocol == htons(ETH_P_IPV6)) ||
+		((features & NETIF_F_FCOE_CRC) &&
+		 protocol == htons(ETH_P_FCOE)));
+}
+
 static netdev_features_t harmonize_features(struct sk_buff *skb,
 	__be16 protocol, netdev_features_t features)
 {
@@ -2474,7 +2485,7 @@ netdev_features_t netif_skb_features(struct sk_buff *skb)
 	if (skb_shinfo(skb)->gso_segs > skb->dev->gso_max_segs)
 		features &= ~NETIF_F_GSO_MASK;
 
-	if (protocol == htons(ETH_P_8021Q) || protocol == htons(ETH_P_8021AD)) {
+	if (protocol == htons(ETH_P_8021Q)) {
 		struct vlan_ethhdr *veh = (struct vlan_ethhdr *)skb->data;
 		protocol = veh->h_vlan_encapsulated_proto;
 	} else if (!vlan_tx_tag_present(skb)) {
@@ -2526,6 +2537,9 @@ int dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
 		 */
 		if (dev->priv_flags & IFF_XMIT_DST_RELEASE)
 			skb_dst_drop(skb);
+
+		if (!list_empty(&ptype_all))
+			dev_queue_xmit_nit(skb, dev);
 
 		features = netif_skb_features(skb);
 
@@ -2621,7 +2635,56 @@ out:
 	return rc;
 }
 
-static void qdisc_pkt_len_init(struct sk_buff *skb)
+static u32 hashrnd __read_mostly;
+
+/*
+ * Returns a Tx hash based on the given packet descriptor a Tx queues' number
+ * to be used as a distribution range.
+ */
+u16 __skb_tx_hash(const struct net_device *dev, const struct sk_buff *skb,
+		  unsigned int num_tx_queues)
+{
+	u32 hash;
+	u16 qoffset = 0;
+	u16 qcount = num_tx_queues;
+
+	if (skb_rx_queue_recorded(skb)) {
+		hash = skb_get_rx_queue(skb);
+		while (unlikely(hash >= num_tx_queues))
+			hash -= num_tx_queues;
+		return hash;
+	}
+
+	if (dev->num_tc) {
+		u8 tc = netdev_get_prio_tc_map(dev, skb->priority);
+		qoffset = dev->tc_to_txq[tc].offset;
+		qcount = dev->tc_to_txq[tc].count;
+	}
+
+	if (skb->sk && skb->sk->sk_hash)
+		hash = skb->sk->sk_hash;
+	else
+		hash = (__force u16) skb->protocol;
+	hash = jhash_1word(hash, hashrnd);
+
+	return (u16) (((u64) hash * qcount) >> 32) + qoffset;
+}
+EXPORT_SYMBOL(__skb_tx_hash);
+
+static inline u16 dev_cap_txqueue(struct net_device *dev, u16 queue_index)
+{
+	if (unlikely(queue_index >= dev->real_num_tx_queues)) {
+		if (net_ratelimit()) {
+			pr_warn("%s selects TX queue %d, but real number of TX queues is %d\n",
+				dev->name, queue_index,
+				dev->real_num_tx_queues);
+		}
+		return 0;
+	}
+	return queue_index;
+}
+
+static inline int get_xps_queue(struct net_device *dev, struct sk_buff *skb)
 {
 	const struct skb_shared_info *shinfo = skb_shinfo(skb);
 
@@ -2877,6 +2940,41 @@ static inline void ____napi_schedule(struct softnet_data *sd,
 	list_add_tail(&napi->poll_list, &sd->poll_list);
 	__raise_softirq_irqoff(NET_RX_SOFTIRQ);
 }
+
+/*
+ * __skb_get_rxhash: calculate a flow hash based on src/dst addresses
+ * and src/dst port numbers.  Sets rxhash in skb to non-zero hash value
+ * on success, zero indicates no valid hash.  Also, sets l4_rxhash in skb
+ * if hash is a canonical 4-tuple hash over transport ports.
+ */
+void __skb_get_rxhash(struct sk_buff *skb)
+{
+	struct flow_keys keys;
+	u32 hash;
+
+	if (!skb_flow_dissect(skb, &keys))
+		return;
+
+	if (keys.ports)
+		skb->l4_rxhash = 1;
+
+	/* get a consistent hash (same value on both flow directions) */
+	if (((__force u32)keys.dst < (__force u32)keys.src) ||
+	    (((__force u32)keys.dst == (__force u32)keys.src) &&
+	     ((__force u16)keys.port16[1] < (__force u16)keys.port16[0]))) {
+		swap(keys.dst, keys.src);
+		swap(keys.port16[0], keys.port16[1]);
+	}
+
+	hash = jhash_3words((__force u32)keys.dst,
+			    (__force u32)keys.src,
+			    (__force u32)keys.ports, hashrnd);
+	if (!hash)
+		hash = 1;
+
+	skb->rxhash = hash;
+}
+EXPORT_SYMBOL(__skb_get_rxhash);
 
 #ifdef CONFIG_RPS
 
@@ -3478,9 +3576,6 @@ skip_taps:
 ncls:
 #endif
 
-	if (pfmemalloc && !skb_pfmemalloc_protocol(skb))
-		goto drop;
-
 	if (vlan_tx_tag_present(skb)) {
 		if (pt_prev) {
 			ret = deliver_skb(skb, pt_prev, orig_dev);
@@ -3501,7 +3596,7 @@ ncls:
 		switch (rx_handler(&skb)) {
 		case RX_HANDLER_CONSUMED:
 			ret = NET_RX_SUCCESS;
-			goto unlock;
+			goto out;
 		case RX_HANDLER_ANOTHER:
 			goto another_round;
 		case RX_HANDLER_EXACT:
@@ -4828,12 +4923,10 @@ int dev_set_mac_address(struct net_device *dev, struct sockaddr *sa)
 	if (!netif_device_present(dev))
 		return -ENODEV;
 	err = ops->ndo_set_mac_address(dev, sa);
-	if (err)
-		return err;
-	dev->addr_assign_type = NET_ADDR_SET;
-	call_netdevice_notifiers(NETDEV_CHANGEADDR, dev);
+	if (!err)
+		call_netdevice_notifiers(NETDEV_CHANGEADDR, dev);
 	add_device_randomness(dev->dev_addr, dev->addr_len);
-	return 0;
+	return err;
 }
 EXPORT_SYMBOL(dev_set_mac_address);
 
@@ -5294,13 +5387,6 @@ int register_netdevice(struct net_device *dev)
 	dev_hold(dev);
 	list_netdevice(dev);
 	add_device_randomness(dev->dev_addr, dev->addr_len);
-
-	/* If the device has permanent device address, driver should
-	 * set dev_addr and also addr_assign_type should be set to
-	 * NET_ADDR_PERM (default value).
-	 */
-	if (dev->addr_assign_type == NET_ADDR_PERM)
-		memcpy(dev->perm_addr, dev->dev_addr, dev->addr_len);
 
 	/* Notify protocols, that a new device appeared. */
 	ret = call_netdevice_notifiers(NETDEV_REGISTER, dev);

@@ -67,8 +67,8 @@ void arch_leave_lazy_mmu_mode(void)
 	tb->active = 0;
 }
 
-static void tlb_batch_add_one(struct mm_struct *mm, unsigned long vaddr,
-			      bool exec)
+void tlb_batch_add(struct mm_struct *mm, unsigned long vaddr,
+		   pte_t *ptep, pte_t orig, int fullmm)
 {
 	struct tlb_batch *tb = &get_cpu_var(tlb_batch);
 	unsigned long nr;
@@ -188,39 +188,18 @@ void set_pmd_at(struct mm_struct *mm, unsigned long addr,
 	}
 }
 
-void pgtable_trans_huge_deposit(struct mm_struct *mm, pgtable_t pgtable)
-{
-	struct list_head *lh = (struct list_head *) pgtable;
-
-	assert_spin_locked(&mm->page_table_lock);
-
-	/* FIFO */
-	if (!mm->pmd_huge_pte)
-		INIT_LIST_HEAD(lh);
-	else
-		list_add(lh, (struct list_head *) mm->pmd_huge_pte);
-	mm->pmd_huge_pte = pgtable;
-}
-
-pgtable_t pgtable_trans_huge_withdraw(struct mm_struct *mm)
-{
-	struct list_head *lh;
-	pgtable_t pgtable;
-
-	assert_spin_locked(&mm->page_table_lock);
-
-	/* FIFO */
-	pgtable = mm->pmd_huge_pte;
-	lh = (struct list_head *) pgtable;
-	if (list_empty(lh))
-		mm->pmd_huge_pte = NULL;
-	else {
-		mm->pmd_huge_pte = (pgtable_t) lh->next;
-		list_del(lh);
+	if (!tb->active) {
+		flush_tsb_user_page(mm, vaddr);
+		global_flush_tlb_page(mm, vaddr);
+		goto out;
 	}
-	pte_val(pgtable[0]) = 0;
-	pte_val(pgtable[1]) = 0;
 
-	return pgtable;
+	if (nr == 0)
+		tb->mm = mm;
+
+	assert_spin_locked(&mm->page_table_lock);
+
+out:
+	put_cpu_var(tlb_batch);
 }
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */

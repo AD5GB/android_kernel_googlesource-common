@@ -1338,6 +1338,13 @@ static void fsi_dma_complete(void *data)
 
 static void fsi_dma_do_work(struct work_struct *work)
 {
+	struct snd_pcm_runtime *runtime = io->substream->runtime;
+
+	return io->dma + samples_to_bytes(runtime, io->buff_sample_pos);
+}
+
+static void fsi_dma_do_work(struct work_struct *work)
+{
 	struct fsi_stream *io = container_of(work, struct fsi_stream, work);
 	struct fsi_priv *fsi = fsi_stream_to_priv(io);
 	struct snd_soc_dai *dai;

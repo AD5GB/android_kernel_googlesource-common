@@ -160,6 +160,17 @@ static void setup_bearer(struct work_struct *work)
 /**
  * enable_bearer - attach TIPC bearer to an Ethernet interface
  */
+static void setup_bearer(struct work_struct *work)
+{
+	struct eth_bearer *eb_ptr =
+		container_of(work, struct eth_bearer, setup);
+
+	dev_add_pack(&eb_ptr->tipc_packet_type);
+}
+
+/**
+ * enable_bearer - attach TIPC bearer to an Ethernet interface
+ */
 static int enable_bearer(struct tipc_bearer *tb_ptr)
 {
 	struct net_device *dev = NULL;

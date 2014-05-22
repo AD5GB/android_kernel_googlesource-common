@@ -167,7 +167,7 @@ static irqreturn_t do_cciss_intx(int irq, void *dev_id);
 static irqreturn_t do_cciss_msix_intr(int irq, void *dev_id);
 static int cciss_open(struct block_device *bdev, fmode_t mode);
 static int cciss_unlocked_open(struct block_device *bdev, fmode_t mode);
-static void cciss_release(struct gendisk *disk, fmode_t mode);
+static int cciss_release(struct gendisk *disk, fmode_t mode);
 static int cciss_ioctl(struct block_device *bdev, fmode_t mode,
 		       unsigned int cmd, unsigned long arg);
 static int cciss_getgeo(struct block_device *bdev, struct hd_geometry *geo);
@@ -1139,6 +1139,7 @@ static void cciss_release(struct gendisk *disk, fmode_t mode)
 	drv->usage_count--;
 	h->usage_count--;
 	mutex_unlock(&cciss_mutex);
+	return 0;
 }
 
 #ifdef CONFIG_COMPAT
@@ -1189,6 +1190,7 @@ static int cciss_ioctl32_passthru(struct block_device *bdev, fmode_t mode,
 	int err;
 	u32 cp;
 
+	memset(&arg64, 0, sizeof(arg64));
 	err = 0;
 	err |=
 	    copy_from_user(&arg64.LUN_info, &arg32->LUN_info,

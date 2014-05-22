@@ -1658,11 +1658,10 @@ static int copy_params(struct dm_ioctl __user *user, struct dm_ioctl *param_kern
 	if (copy_from_user(dmi, user, param_kernel->data_size))
 		goto bad;
 
-data_copied:
 	/*
 	 * Abort if something changed the ioctl data while it was being copied.
 	 */
-	if (dmi->data_size != param_kernel->data_size) {
+	if (dmi->data_size != tmp.data_size) {
 		DMERR("rejecting ioctl: data size modified while processing parameters");
 		goto bad;
 	}

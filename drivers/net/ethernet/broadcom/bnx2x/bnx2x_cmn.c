@@ -273,7 +273,7 @@ int bnx2x_tx_int(struct bnx2x *bp, struct bnx2x_fp_txdata *txdata)
 
 		if ((netif_tx_queue_stopped(txq)) &&
 		    (bp->state == BNX2X_STATE_OPEN) &&
-		    (bnx2x_tx_avail(bp, txdata) >= MAX_DESC_PER_TX_PKT))
+		    (bnx2x_tx_avail(bp, txdata) >= MAX_SKB_FRAGS + 4))
 			netif_tx_wake_queue(txq);
 
 		__netif_tx_unlock(txq);
@@ -747,40 +747,8 @@ drop:
 	bnx2x_fp_stats(bp, fp)->eth_q_stats.rx_skb_alloc_failed++;
 }
 
-static int bnx2x_alloc_rx_data(struct bnx2x *bp,
-			       struct bnx2x_fastpath *fp, u16 index)
-{
-	u8 *data;
-	struct sw_rx_bd *rx_buf = &fp->rx_buf_ring[index];
-	struct eth_rx_bd *rx_bd = &fp->rx_desc_ring[index];
-	dma_addr_t mapping;
-
-	data = bnx2x_frag_alloc(fp);
-	if (unlikely(data == NULL))
-		return -ENOMEM;
-
-	mapping = dma_map_single(&bp->pdev->dev, data + NET_SKB_PAD,
-				 fp->rx_buf_size,
-				 DMA_FROM_DEVICE);
-	if (unlikely(dma_mapping_error(&bp->pdev->dev, mapping))) {
-		bnx2x_frag_free(fp, data);
-		BNX2X_ERR("Can't map rx data\n");
-		return -ENOMEM;
-	}
-
-	rx_buf->data = data;
-	dma_unmap_addr_set(rx_buf, mapping, mapping);
-
-	rx_bd->addr_hi = cpu_to_le32(U64_HI(mapping));
-	rx_bd->addr_lo = cpu_to_le32(U64_LO(mapping));
-
-	return 0;
-}
-
-static
-void bnx2x_csum_validate(struct sk_buff *skb, union eth_rx_cqe *cqe,
-				 struct bnx2x_fastpath *fp,
-				 struct bnx2x_eth_q_stats *qstats)
+static void bnx2x_csum_validate(struct sk_buff *skb, union eth_rx_cqe *cqe,
+				struct bnx2x_fastpath *fp)
 {
 	/* Do nothing if no L4 csum validation was done.
 	 * We do not check whether IP csum was validated. For IPv4 we assume
@@ -796,7 +764,7 @@ void bnx2x_csum_validate(struct sk_buff *skb, union eth_rx_cqe *cqe,
 	if (cqe->fast_path_cqe.type_error_flags &
 	    (ETH_FAST_PATH_RX_CQE_IP_BAD_XSUM_FLG |
 	     ETH_FAST_PATH_RX_CQE_L4_BAD_XSUM_FLG))
-		qstats->hw_csum_err++;
+		fp->eth_q_stats.hw_csum_err++;
 	else
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 }
@@ -993,8 +961,8 @@ reuse_rx:
 		skb_checksum_none_assert(skb);
 
 		if (bp->dev->features & NETIF_F_RXCSUM)
-			bnx2x_csum_validate(skb, cqe, fp,
-					    bnx2x_fp_qstats(bp, fp));
+			bnx2x_csum_validate(skb, cqe, fp);
+
 
 		skb_record_rx_queue(skb, fp->rx_queue);
 
@@ -3935,7 +3903,7 @@ netdev_tx_t bnx2x_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	txdata->tx_bd_prod += nbd;
 
-	if (unlikely(bnx2x_tx_avail(bp, txdata) < MAX_DESC_PER_TX_PKT)) {
+	if (unlikely(bnx2x_tx_avail(bp, txdata) < MAX_SKB_FRAGS + 4)) {
 		netif_tx_stop_queue(txq);
 
 		/* paired memory barrier is in bnx2x_tx_int(), we have to keep
@@ -3943,8 +3911,8 @@ netdev_tx_t bnx2x_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		 * fp->bd_tx_cons */
 		smp_mb();
 
-		bnx2x_fp_qstats(bp, txdata->parent_fp)->driver_xoff++;
-		if (bnx2x_tx_avail(bp, txdata) >= MAX_DESC_PER_TX_PKT)
+		fp->eth_q_stats.driver_xoff++;
+		if (bnx2x_tx_avail(bp, txdata) >= MAX_SKB_FRAGS + 4)
 			netif_tx_wake_queue(txq);
 	}
 	txdata->tx_pkt++;

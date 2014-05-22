@@ -711,7 +711,7 @@ static void efx_stop_datapath(struct efx_nic *efx)
 	BUG_ON(efx->port_enabled);
 
 	/* Only perform flush if dma is enabled */
-	if (dev->is_busmaster && efx->state != STATE_RECOVERY) {
+	if (dev->is_busmaster) {
 		rc = efx_nic_flush_queues(efx);
 
 		if (rc && EFX_WORKAROUND_7803(efx)) {
@@ -2849,7 +2849,7 @@ static int efx_pm_freeze(struct device *dev)
 	if (efx->state != STATE_DISABLED) {
 		efx->state = STATE_UNINIT;
 
-		efx_device_detach_sync(efx);
+	efx_device_detach_sync(efx);
 
 		efx_stop_all(efx);
 		efx_stop_interrupts(efx, false);

@@ -31,11 +31,9 @@
 #include <linux/random.h>
 #include <linux/hw_breakpoint.h>
 #include <linux/cpuidle.h>
-#include <linux/leds.h>
 #include <linux/console.h>
 
 #include <asm/cacheflush.h>
-#include <asm/idmap.h>
 #include <asm/processor.h>
 #include <asm/thread_notify.h>
 #include <asm/stacktrace.h>
@@ -58,6 +56,10 @@ static const char *isa_modes[] = {
   "ARM" , "Thumb" , "Jazelle", "ThumbEE"
 };
 
+extern void setup_mm_for_reboot(void);
+
+static volatile int hlt_counter;
+
 #ifdef CONFIG_SMP
 void arch_trigger_all_cpu_backtrace(void)
 {
@@ -70,8 +72,44 @@ void arch_trigger_all_cpu_backtrace(void)
 }
 #endif
 
+void disable_hlt(void)
+{
+	smp_send_all_cpu_backtrace();
+}
+#else
+void arch_trigger_all_cpu_backtrace(void)
+{
+	dump_stack();
+}
+#endif
+
 extern void call_with_stack(void (*fn)(void *), void *arg, void *sp);
 typedef void (*phys_reset_t)(unsigned long);
+
+#ifdef CONFIG_ARM_FLUSH_CONSOLE_ON_RESTART
+void arm_machine_flush_console(void)
+{
+	printk("\n");
+	pr_emerg("Restarting %s\n", linux_banner);
+	if (console_trylock()) {
+		console_unlock();
+		return;
+	}
+
+	mdelay(50);
+
+	local_irq_disable();
+	if (!console_trylock())
+		pr_emerg("arm_restart: Console was locked! Busting\n");
+	else
+		pr_emerg("arm_restart: Console was locked!\n");
+	console_unlock();
+}
+#else
+void arm_machine_flush_console(void)
+{
+}
+#endif
 
 #ifdef CONFIG_ARM_FLUSH_CONSOLE_ON_RESTART
 void arm_machine_flush_console(void)
@@ -183,12 +221,15 @@ void arch_cpu_idle_prepare(void)
 	local_fiq_enable();
 }
 
-void arch_cpu_idle_enter(void)
-{
-	idle_notifier_call_chain(IDLE_START);
-	ledtrig_cpu(CPU_LED_IDLE_START);
-#ifdef CONFIG_PL310_ERRATA_769419
-	wmb();
+	/* endless idle loop with no priority at all */
+	while (1) {
+		idle_notifier_call_chain(IDLE_START);
+		tick_nohz_idle_enter();
+		rcu_idle_enter();
+		while (!need_resched()) {
+#ifdef CONFIG_HOTPLUG_CPU
+			if (cpu_is_offline(smp_processor_id()))
+				cpu_die();
 #endif
 }
 
@@ -204,14 +245,27 @@ void arch_cpu_idle_dead(void)
 	cpu_die();
 }
 #endif
-
-/*
- * Called from the core idle loop.
- */
-void arch_cpu_idle(void)
-{
-	if (cpuidle_idle_call())
-		default_idle();
+			if (hlt_counter) {
+				local_irq_enable();
+				cpu_relax();
+			} else if (!need_resched()) {
+				stop_critical_timings();
+				if (cpuidle_idle_call())
+					pm_idle();
+				start_critical_timings();
+				/*
+				 * pm_idle functions must always
+				 * return with IRQs enabled.
+				 */
+				WARN_ON(irqs_disabled());
+			} else
+				local_irq_enable();
+		}
+		rcu_idle_exit();
+		tick_nohz_idle_exit();
+		idle_notifier_call_chain(IDLE_END);
+		schedule_preempt_disabled();
+	}
 }
 
 static char reboot_mode = 'h';
@@ -244,6 +298,8 @@ void machine_shutdown(void)
 	 * one of the stopped CPUs.
 	 */
 	preempt_disable();
+
+	smp_send_stop();
 #endif
 	disable_nonboot_cpus();
 }
@@ -255,8 +311,7 @@ void machine_shutdown(void)
  */
 void machine_halt(void)
 {
-	smp_send_stop();
-
+	machine_shutdown();
 	local_irq_disable();
 	while (1);
 }
@@ -289,6 +344,10 @@ void machine_power_off(void)
 void machine_restart(char *cmd)
 {
 	smp_send_stop();
+
+	/* Flush the console to make sure all the relevant messages make it
+	 * out to the console drivers */
+	arm_machine_flush_console();
 
 	/* Flush the console to make sure all the relevant messages make it
 	 * out to the console drivers */

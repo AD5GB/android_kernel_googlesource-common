@@ -2204,12 +2204,16 @@ static int pair_device(struct sock *sk, struct hci_dev *hdev, void *data,
 	else
 		auth_type = HCI_AT_DEDICATED_BONDING_MITM;
 
-	if (cp->addr.type == BDADDR_BREDR)
+	if (cp->addr.type == MGMT_ADDR_BREDR)
 		conn = hci_connect(hdev, ACL_LINK, 0, &cp->addr.bdaddr,
-				   cp->addr.type, sec_level, auth_type);
+				   sec_level, auth_type);
 	else
 		conn = hci_connect(hdev, LE_LINK, 0, &cp->addr.bdaddr,
-				   cp->addr.type, sec_level, auth_type);
+				   sec_level, auth_type);
+
+	memset(&rp, 0, sizeof(rp));
+	bacpy(&rp.addr.bdaddr, &cp->addr.bdaddr);
+	rp.addr.type = cp->addr.type;
 
 	if (IS_ERR(conn)) {
 		int status;
@@ -3405,9 +3409,29 @@ int mgmt_powered(struct hci_dev *hdev, u8 powered)
 	mgmt_pending_foreach(MGMT_OP_SET_POWERED, hdev, settings_rsp, &match);
 	mgmt_pending_foreach(0, hdev, cmd_status_rsp, &status_not_powered);
 
-	if (memcmp(hdev->dev_class, zero_cod, sizeof(zero_cod)) != 0)
-		mgmt_event(MGMT_EV_CLASS_OF_DEV_CHANGED, hdev,
-			   zero_cod, sizeof(zero_cod), NULL);
+		if (test_bit(HCI_SSP_ENABLED, &hdev->dev_flags)) {
+			u8 ssp = 1;
+
+			hci_send_cmd(hdev, HCI_OP_WRITE_SSP_MODE, 1, &ssp);
+		}
+
+		if (test_bit(HCI_LE_ENABLED, &hdev->dev_flags)) {
+			struct hci_cp_write_le_host_supported cp;
+
+			cp.le = 1;
+			cp.simul = !!(hdev->features[6] & LMP_SIMUL_LE_BR);
+
+			hci_send_cmd(hdev, HCI_OP_WRITE_LE_HOST_SUPPORTED,
+				     sizeof(cp), &cp);
+		}
+
+		update_class(hdev);
+		update_name(hdev, hdev->dev_name);
+		update_eir(hdev);
+	} else {
+		u8 status = MGMT_STATUS_NOT_POWERED;
+		mgmt_pending_foreach(0, hdev, cmd_status_rsp, &status);
+	}
 
 new_settings:
 	err = new_settings(hdev, match.sk);

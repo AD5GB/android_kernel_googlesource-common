@@ -415,8 +415,6 @@ struct kvm_vcpu_arch {
 	unsigned int hw_tsc_khz;
 	struct gfn_to_hva_cache pv_time;
 	bool pv_time_enabled;
-	/* set guest stopped flag in pvclock flags field */
-	bool pvclock_set_guest_stopped_request;
 
 	struct {
 		u64 msr_val;

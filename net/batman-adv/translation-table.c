@@ -2390,29 +2390,8 @@ int batadv_tt_append_diff(struct batadv_priv *bat_priv,
 			  unsigned char **packet_buff, int *packet_buff_len,
 			  int packet_min_len)
 {
-	int tt_num_changes;
-
-	/* if at least one change happened */
-	tt_num_changes = batadv_tt_commit_changes(bat_priv, packet_buff,
-						  packet_buff_len,
-						  packet_min_len);
-
-	/* if the changes have been sent often enough */
-	if ((tt_num_changes < 0) &&
-	    (!batadv_atomic_dec_not_zero(&bat_priv->tt.ogm_append_cnt))) {
-		batadv_tt_realloc_packet_buff(packet_buff, packet_buff_len,
-					      packet_min_len, packet_min_len);
-		tt_num_changes = 0;
-	}
-
-	return tt_num_changes;
-}
-
-bool batadv_is_ap_isolated(struct batadv_priv *bat_priv, uint8_t *src,
-			   uint8_t *dst)
-{
-	struct batadv_tt_local_entry *tt_local_entry = NULL;
-	struct batadv_tt_global_entry *tt_global_entry = NULL;
+	struct tt_local_entry *tt_local_entry = NULL;
+	struct tt_global_entry *tt_global_entry = NULL;
 	bool ret = false;
 
 	if (!atomic_read(&bat_priv->ap_isolation))
@@ -2426,7 +2405,7 @@ bool batadv_is_ap_isolated(struct batadv_priv *bat_priv, uint8_t *src,
 	if (!tt_global_entry)
 		goto out;
 
-	if (!_batadv_is_ap_isolated(tt_local_entry, tt_global_entry))
+	if (!_is_ap_isolated(tt_local_entry, tt_global_entry))
 		goto out;
 
 	ret = true;

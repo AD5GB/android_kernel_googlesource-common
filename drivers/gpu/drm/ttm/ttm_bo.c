@@ -1865,10 +1865,13 @@ static int ttm_bo_swapout(struct ttm_mem_shrink *shrink)
 			break;
 	}
 
-	if (ret) {
-		spin_unlock(&glob->lru_lock);
-		return ret;
-	}
+		if (!list_empty(&bo->ddestroy)) {
+			spin_unlock(&glob->lru_lock);
+			(void) ttm_bo_cleanup_refs(bo, false, false, false);
+			kref_put(&bo->list_kref, ttm_bo_release_list);
+			spin_lock(&glob->lru_lock);
+			continue;
+		}
 
 	kref_get(&bo->list_kref);
 

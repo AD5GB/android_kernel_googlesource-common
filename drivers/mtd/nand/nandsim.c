@@ -1022,6 +1022,8 @@ static int setup_wear_reporting(struct mtd_info *mtd)
 {
 	size_t mem;
 
+	if (!rptwear)
+		return 0;
 	wear_eb_count = div_u64(mtd->size, mtd->erasesize);
 	mem = wear_eb_count * sizeof(unsigned long);
 	if (mem / sizeof(unsigned long) != wear_eb_count) {

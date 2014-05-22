@@ -26,7 +26,6 @@
 #include <linux/mutex.h>
 #include <linux/freezer.h>
 #include <linux/random.h>
-#include <linux/pm_qos.h>
 
 #include <asm/uaccess.h>
 #include <asm/byteorder.h>
@@ -668,6 +667,15 @@ resubmit:
 static inline int
 hub_clear_tt_buffer (struct usb_device *hdev, u16 devinfo, u16 tt)
 {
+	/* Need to clear both directions for control ep */
+	if (((devinfo >> 11) & USB_ENDPOINT_XFERTYPE_MASK) ==
+			USB_ENDPOINT_XFER_CONTROL) {
+		int status = usb_control_msg(hdev, usb_sndctrlpipe(hdev, 0),
+				HUB_CLEAR_TT_BUFFER, USB_RT_PORT,
+				devinfo ^ 0x8000, tt, NULL, 0, 1000);
+		if (status)
+			return status;
+	}
 	return usb_control_msg(hdev, usb_sndctrlpipe(hdev, 0),
 			       HUB_CLEAR_TT_BUFFER, USB_RT_PORT, devinfo,
 			       tt, NULL, 0, 1000);
@@ -692,6 +700,9 @@ static void hub_tt_work(struct work_struct *work)
 		struct usb_device	*hdev = hub->hdev;
 		const struct hc_driver	*drv;
 		int			status;
+
+		if (!hub->quiescing && --limit < 0)
+			break;
 
 		next = hub->tt.clear_list.next;
 		clear = list_entry (next, struct usb_tt_clear, clear_list);
@@ -879,8 +890,11 @@ static int hub_usb3_port_disable(struct usb_hub *hub, int port1)
 		return -EINVAL;
 
 	ret = hub_set_port_link_state(hub, port1, USB_SS_PORT_LS_SS_DISABLED);
-	if (ret)
+	if (ret) {
+		dev_err(hub->intfdev, "cannot disable port %d (err = %d)\n",
+				port1, ret);
 		return ret;
+	}
 
 	/* Wait for the link to enter the disabled state. */
 	for (total_time = 0; ; total_time += HUB_DEBOUNCE_STEP) {
@@ -914,10 +928,10 @@ static int hub_port_disable(struct usb_hub *hub, int port1, int set_state)
 		if (hub_is_superspeed(hub->hdev))
 			ret = hub_usb3_port_disable(hub, port1);
 		else
-			ret = usb_clear_port_feature(hdev, port1,
+			ret = clear_port_feature(hdev, port1,
 					USB_PORT_FEAT_ENABLE);
 	}
-	if (ret && ret != -ENODEV)
+	if (ret)
 		dev_err(hub->intfdev, "cannot disable port %d (err = %d)\n",
 				port1, ret);
 	return ret;
@@ -1250,7 +1264,7 @@ static void hub_quiesce(struct usb_hub *hub, enum hub_quiescing_type type)
 	if (hub->has_indicators)
 		cancel_delayed_work_sync(&hub->leds);
 	if (hub->tt.hub)
-		flush_work(&hub->tt.clear_work);
+		flush_work_sync(&hub->tt.clear_work);
 }
 
 /* caller has locked the hub device */
@@ -2521,9 +2535,42 @@ static int hub_port_wait_reset(struct usb_hub *hub, int port1,
 			return ret;
 
 		/* The port state is unknown until the reset completes. */
-		if (!(portstatus & USB_PORT_STAT_RESET))
-			break;
+		if ((portstatus & USB_PORT_STAT_RESET))
+			goto delay;
 
+		if (hub_port_warm_reset_required(hub, portstatus))
+			return -ENOTCONN;
+
+		/* Device went away? */
+		if (!(portstatus & USB_PORT_STAT_CONNECTION))
+			return -ENOTCONN;
+
+		/* bomb out completely if the connection bounced.  A USB 3.0
+		 * connection may bounce if multiple warm resets were issued,
+		 * but the device may have successfully re-connected. Ignore it.
+		 */
+		if (!hub_is_superspeed(hub->hdev) &&
+				(portchange & USB_PORT_STAT_C_CONNECTION))
+			return -ENOTCONN;
+
+		if ((portstatus & USB_PORT_STAT_ENABLE)) {
+			if (!udev)
+				return 0;
+
+			if (hub_is_wusb(hub))
+				udev->speed = USB_SPEED_WIRELESS;
+			else if (hub_is_superspeed(hub->hdev))
+				udev->speed = USB_SPEED_SUPER;
+			else if (portstatus & USB_PORT_STAT_HIGH_SPEED)
+				udev->speed = USB_SPEED_HIGH;
+			else if (portstatus & USB_PORT_STAT_LOW_SPEED)
+				udev->speed = USB_SPEED_LOW;
+			else
+				udev->speed = USB_SPEED_FULL;
+			return 0;
+		}
+
+delay:
 		/* switch to the long delay after two short delay failures */
 		if (delay_time >= 2 * HUB_SHORT_RESET_TIME)
 			delay = HUB_LONG_RESET_TIME;
@@ -2593,11 +2640,11 @@ static void hub_port_finish_reset(struct usb_hub *hub, int port1,
 		usb_clear_port_feature(hub->hdev,
 				port1, USB_PORT_FEAT_C_RESET);
 		if (hub_is_superspeed(hub->hdev)) {
-			usb_clear_port_feature(hub->hdev, port1,
+			clear_port_feature(hub->hdev, port1,
 					USB_PORT_FEAT_C_BH_PORT_RESET);
 			usb_clear_port_feature(hub->hdev, port1,
 					USB_PORT_FEAT_C_PORT_LINK_STATE);
-			usb_clear_port_feature(hub->hdev, port1,
+			clear_port_feature(hub->hdev, port1,
 					USB_PORT_FEAT_C_CONNECTION);
 		}
 		if (udev)
@@ -2662,6 +2709,31 @@ static int hub_port_reset(struct usb_hub *hub, int port1,
 		/* Check for disconnect or reset */
 		if (status == 0 || status == -ENOTCONN || status == -ENODEV) {
 			hub_port_finish_reset(hub, port1, udev, &status);
+
+			if (!hub_is_superspeed(hub->hdev))
+				goto done;
+
+			/*
+			 * If a USB 3.0 device migrates from reset to an error
+			 * state, re-issue the warm reset.
+			 */
+			if (hub_port_status(hub, port1,
+					&portstatus, &portchange) < 0)
+				goto done;
+
+			if (!hub_port_warm_reset_required(hub, portstatus))
+				goto done;
+
+			/*
+			 * If the port is in SS.Inactive or Compliance Mode, the
+			 * hot or warm reset failed.  Try another warm reset.
+			 */
+			if (!warm) {
+				dev_dbg(hub->intfdev, "hot reset failed, warm reset port %d\n",
+						port1);
+				warm = true;
+			}
+		}
 
 			if (!hub_is_superspeed(hub->hdev))
 				goto done;
@@ -2783,51 +2855,7 @@ static int check_port_resume_type(struct usb_device *udev,
 	return status;
 }
 
-int usb_disable_ltm(struct usb_device *udev)
-{
-	struct usb_hcd *hcd = bus_to_hcd(udev->bus);
-
-	/* Check if the roothub and device supports LTM. */
-	if (!usb_device_supports_ltm(hcd->self.root_hub) ||
-			!usb_device_supports_ltm(udev))
-		return 0;
-
-	/* Clear Feature LTM Enable can only be sent if the device is
-	 * configured.
-	 */
-	if (!udev->actconfig)
-		return 0;
-
-	return usb_control_msg(udev, usb_sndctrlpipe(udev, 0),
-			USB_REQ_CLEAR_FEATURE, USB_RECIP_DEVICE,
-			USB_DEVICE_LTM_ENABLE, 0, NULL, 0,
-			USB_CTRL_SET_TIMEOUT);
-}
-EXPORT_SYMBOL_GPL(usb_disable_ltm);
-
-void usb_enable_ltm(struct usb_device *udev)
-{
-	struct usb_hcd *hcd = bus_to_hcd(udev->bus);
-
-	/* Check if the roothub and device supports LTM. */
-	if (!usb_device_supports_ltm(hcd->self.root_hub) ||
-			!usb_device_supports_ltm(udev))
-		return;
-
-	/* Set Feature LTM Enable can only be sent if the device is
-	 * configured.
-	 */
-	if (!udev->actconfig)
-		return;
-
-	usb_control_msg(udev, usb_sndctrlpipe(udev, 0),
-			USB_REQ_SET_FEATURE, USB_RECIP_DEVICE,
-			USB_DEVICE_LTM_ENABLE, 0, NULL, 0,
-			USB_CTRL_SET_TIMEOUT);
-}
-EXPORT_SYMBOL_GPL(usb_enable_ltm);
-
-#ifdef	CONFIG_PM
+#ifdef	CONFIG_USB_SUSPEND
 /*
  * usb_disable_function_remotewakeup - disable usb3.0
  * device's function remote wakeup
@@ -2992,10 +3020,6 @@ int usb_port_suspend(struct usb_device *udev, pm_message_t msg)
 		/* Try to enable USB2 hardware LPM again */
 		if (udev->usb2_hw_lpm_capable == 1)
 			usb_set_usb2_hardware_lpm(udev, 1);
-
-		/* Try to enable USB3 LTM and LPM again */
-		usb_enable_ltm(udev);
-		usb_unlocked_enable_lpm(udev);
 
 		/* System sleep transitions should never fail */
 		if (!PMSG_IS_AUTO(msg))
@@ -4761,10 +4785,11 @@ static void hub_events(void)
 			if (hub_port_warm_reset_required(hub, portstatus)) {
 				int status;
 				struct usb_device *udev =
-					hub->ports[i - 1]->child;
+					hub->hdev->children[i - 1];
 
 				dev_dbg(hub_dev, "warm reset port %d\n", i);
-				if (!udev) {
+				if (!udev || !(portstatus &
+						USB_PORT_STAT_CONNECTION)) {
 					status = hub_port_reset(hub, i,
 							NULL, HUB_BH_RESET_TIME,
 							true);
@@ -4774,8 +4799,8 @@ static void hub_events(void)
 					usb_lock_device(udev);
 					status = usb_reset_device(udev);
 					usb_unlock_device(udev);
+					connect_change = 0;
 				}
-				connect_change = 0;
 			}
 
 			if (connect_change)

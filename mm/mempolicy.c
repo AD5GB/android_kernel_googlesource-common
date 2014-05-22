@@ -728,7 +728,7 @@ static int mbind_range(struct mm_struct *mm, unsigned long start,
 			((vmstart - vma->vm_start) >> PAGE_SHIFT);
 		prev = vma_merge(mm, prev, vmstart, vmend, vma->vm_flags,
 				  vma->anon_vma, vma->vm_file, pgoff,
-				  new_pol, vma_get_anon_name(vma));
+				  new_pol, vma_get_anon_name(name));
 		if (prev) {
 			vma = prev;
 			next = vma->vm_next;
@@ -2137,7 +2137,7 @@ bool __mpol_equal(struct mempolicy *a, struct mempolicy *b)
  */
 
 /* lookup first element intersecting start-end */
-/* Caller holds sp->lock */
+/* Caller holds sp->mutex */
 static struct sp_node *
 sp_lookup(struct shared_policy *sp, unsigned long start, unsigned long end)
 {
@@ -2201,13 +2201,13 @@ mpol_shared_policy_lookup(struct shared_policy *sp, unsigned long idx)
 
 	if (!sp->root.rb_node)
 		return NULL;
-	spin_lock(&sp->lock);
+	mutex_lock(&sp->mutex);
 	sn = sp_lookup(sp, idx, idx+1);
 	if (sn) {
 		mpol_get(sn->policy);
 		pol = sn->policy;
 	}
-	spin_unlock(&sp->lock);
+	mutex_unlock(&sp->mutex);
 	return pol;
 }
 
@@ -2217,128 +2217,11 @@ static void sp_free(struct sp_node *n)
 	kmem_cache_free(sn_cache, n);
 }
 
-/**
- * mpol_misplaced - check whether current page node is valid in policy
- *
- * @page   - page to be checked
- * @vma    - vm area where page mapped
- * @addr   - virtual address where page mapped
- *
- * Lookup current policy node id for vma,addr and "compare to" page's
- * node id.
- *
- * Returns:
- *	-1	- not misplaced, page is in the right node
- *	node	- node id where the page should be
- *
- * Policy determination "mimics" alloc_page_vma().
- * Called from fault path where we know the vma and faulting address.
- */
-int mpol_misplaced(struct page *page, struct vm_area_struct *vma, unsigned long addr)
-{
-	struct mempolicy *pol;
-	struct zone *zone;
-	int curnid = page_to_nid(page);
-	unsigned long pgoff;
-	int polnid = -1;
-	int ret = -1;
-
-	BUG_ON(!vma);
-
-	pol = get_vma_policy(current, vma, addr);
-	if (!(pol->flags & MPOL_F_MOF))
-		goto out;
-
-	switch (pol->mode) {
-	case MPOL_INTERLEAVE:
-		BUG_ON(addr >= vma->vm_end);
-		BUG_ON(addr < vma->vm_start);
-
-		pgoff = vma->vm_pgoff;
-		pgoff += (addr - vma->vm_start) >> PAGE_SHIFT;
-		polnid = offset_il_node(pol, vma, pgoff);
-		break;
-
-	case MPOL_PREFERRED:
-		if (pol->flags & MPOL_F_LOCAL)
-			polnid = numa_node_id();
-		else
-			polnid = pol->v.preferred_node;
-		break;
-
-	case MPOL_BIND:
-		/*
-		 * allows binding to multiple nodes.
-		 * use current page if in policy nodemask,
-		 * else select nearest allowed node, if any.
-		 * If no allowed nodes, use current [!misplaced].
-		 */
-		if (node_isset(curnid, pol->v.nodes))
-			goto out;
-		(void)first_zones_zonelist(
-				node_zonelist(numa_node_id(), GFP_HIGHUSER),
-				gfp_zone(GFP_HIGHUSER),
-				&pol->v.nodes, &zone);
-		polnid = zone->node;
-		break;
-
-	default:
-		BUG();
-	}
-
-	/* Migrate the page towards the node whose CPU is referencing it */
-	if (pol->flags & MPOL_F_MORON) {
-		int last_nid;
-
-		polnid = numa_node_id();
-
-		/*
-		 * Multi-stage node selection is used in conjunction
-		 * with a periodic migration fault to build a temporal
-		 * task<->page relation. By using a two-stage filter we
-		 * remove short/unlikely relations.
-		 *
-		 * Using P(p) ~ n_p / n_t as per frequentist
-		 * probability, we can equate a task's usage of a
-		 * particular page (n_p) per total usage of this
-		 * page (n_t) (in a given time-span) to a probability.
-		 *
-		 * Our periodic faults will sample this probability and
-		 * getting the same result twice in a row, given these
-		 * samples are fully independent, is then given by
-		 * P(n)^2, provided our sample period is sufficiently
-		 * short compared to the usage pattern.
-		 *
-		 * This quadric squishes small probabilities, making
-		 * it less likely we act on an unlikely task<->page
-		 * relation.
-		 */
-		last_nid = page_nid_xchg_last(page, polnid);
-		if (last_nid != polnid)
-			goto out;
-	}
-
-	if (curnid != polnid)
-		ret = polnid;
-out:
-	mpol_cond_put(pol);
-
-	return ret;
-}
-
 static void sp_delete(struct shared_policy *sp, struct sp_node *n)
 {
 	pr_debug("deleting %lx-l%lx\n", n->start, n->end);
 	rb_erase(&n->nd, &sp->root);
 	sp_free(n);
-}
-
-static void sp_node_init(struct sp_node *node, unsigned long start,
-			unsigned long end, struct mempolicy *pol)
-{
-	node->start = start;
-	node->end = end;
-	node->policy = pol;
 }
 
 static struct sp_node *sp_alloc(unsigned long start, unsigned long end,
@@ -2357,7 +2240,10 @@ static struct sp_node *sp_alloc(unsigned long start, unsigned long end,
 		return NULL;
 	}
 	newpol->flags |= MPOL_F_SHARED;
-	sp_node_init(n, start, end, newpol);
+
+	n->start = start;
+	n->end = end;
+	n->policy = newpol;
 
 	return n;
 }
@@ -2367,12 +2253,9 @@ static int shared_policy_replace(struct shared_policy *sp, unsigned long start,
 				 unsigned long end, struct sp_node *new)
 {
 	struct sp_node *n;
-	struct sp_node *n_new = NULL;
-	struct mempolicy *mpol_new = NULL;
 	int ret = 0;
 
-restart:
-	spin_lock(&sp->lock);
+	mutex_lock(&sp->mutex);
 	n = sp_lookup(sp, start, end);
 	/* Take care of old policies in the same range. */
 	while (n && n->start < end) {
@@ -2385,16 +2268,14 @@ restart:
 		} else {
 			/* Old policy spanning whole new range. */
 			if (n->end > end) {
-				if (!n_new)
-					goto alloc_new;
-
-				*mpol_new = *n->policy;
-				atomic_set(&mpol_new->refcnt, 1);
-				sp_node_init(n_new, end, n->end, mpol_new);
+				struct sp_node *new2;
+				new2 = sp_alloc(end, n->end, n->policy);
+				if (!new2) {
+					ret = -ENOMEM;
+					goto out;
+				}
 				n->end = start;
-				sp_insert(sp, n_new);
-				n_new = NULL;
-				mpol_new = NULL;
+				sp_insert(sp, new2);
 				break;
 			} else
 				n->end = start;
@@ -2405,27 +2286,9 @@ restart:
 	}
 	if (new)
 		sp_insert(sp, new);
-	spin_unlock(&sp->lock);
-	ret = 0;
-
-err_out:
-	if (mpol_new)
-		mpol_put(mpol_new);
-	if (n_new)
-		kmem_cache_free(sn_cache, n_new);
-
+out:
+	mutex_unlock(&sp->mutex);
 	return ret;
-
-alloc_new:
-	spin_unlock(&sp->lock);
-	ret = -ENOMEM;
-	n_new = kmem_cache_alloc(sn_cache, GFP_KERNEL);
-	if (!n_new)
-		goto err_out;
-	mpol_new = kmem_cache_alloc(policy_cache, GFP_KERNEL);
-	if (!mpol_new)
-		goto err_out;
-	goto restart;
 }
 
 /**
@@ -2443,7 +2306,7 @@ void mpol_shared_policy_init(struct shared_policy *sp, struct mempolicy *mpol)
 	int ret;
 
 	sp->root = RB_ROOT;		/* empty tree == default mempolicy */
-	spin_lock_init(&sp->lock);
+	mutex_init(&sp->mutex);
 
 	if (mpol) {
 		struct vm_area_struct pvma;
@@ -2509,14 +2372,14 @@ void mpol_free_shared_policy(struct shared_policy *p)
 
 	if (!p->root.rb_node)
 		return;
-	spin_lock(&p->lock);
+	mutex_lock(&p->mutex);
 	next = rb_first(&p->root);
 	while (next) {
 		n = rb_entry(next, struct sp_node, nd);
 		next = rb_next(&n->nd);
 		sp_delete(p, n);
 	}
-	spin_unlock(&p->lock);
+	mutex_unlock(&p->mutex);
 }
 
 #ifdef CONFIG_NUMA_BALANCING
@@ -2645,13 +2508,14 @@ static const char * const policy_modes[] =
  * mpol_parse_str - parse string to mempolicy, for tmpfs mpol mount option.
  * @str:  string containing mempolicy to parse
  * @mpol:  pointer to struct mempolicy pointer, returned on success.
+ * @unused:  redundant argument, to be removed later.
  *
  * Format of input:
  *	<mode>[=<flags>][:<nodelist>]
  *
  * On success, returns 0, else 1
  */
-int mpol_parse_str(char *str, struct mempolicy **mpol)
+int mpol_parse_str(char *str, struct mempolicy **mpol, int unused)
 {
 	struct mempolicy *new = NULL;
 	unsigned short mode;
@@ -2779,12 +2643,13 @@ out:
  * @buffer:  to contain formatted mempolicy string
  * @maxlen:  length of @buffer
  * @pol:  pointer to mempolicy to be formatted
+ * @unused:  redundant argument, to be removed later.
  *
  * Convert a mempolicy into a string.
  * Returns the number of characters in buffer (if positive)
  * or an error (negative)
  */
-int mpol_to_str(char *buffer, int maxlen, struct mempolicy *pol)
+int mpol_to_str(char *buffer, int maxlen, struct mempolicy *pol, int unused)
 {
 	char *p = buffer;
 	int l;

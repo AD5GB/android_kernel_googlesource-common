@@ -961,8 +961,6 @@ static int adp8870_i2c_suspend(struct device *dev)
 
 static int adp8870_i2c_resume(struct device *dev)
 {
-	struct i2c_client *client = to_i2c_client(dev);
-
 	adp8870_set_bits(client, ADP8870_MDCR, NSTBY | BLEN);
 
 	return 0;

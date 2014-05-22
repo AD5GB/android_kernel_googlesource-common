@@ -38,9 +38,12 @@ static unsigned int l2x0_sets;
 static unsigned int l2x0_ways;
 static unsigned long sync_reg_offset = L2X0_CACHE_SYNC;
 
-/* Aurora don't have the cache ID register available, so we have to
- * pass it though the device tree */
-static u32  cache_id_part_number_from_dt;
+static inline bool is_pl310_rev(int rev)
+{
+	return (l2x0_cache_id &
+		(L2X0_CACHE_ID_PART_MASK | L2X0_CACHE_ID_REV_MASK)) ==
+			(L2X0_CACHE_ID_PART_L310 | rev);
+}
 
 struct l2x0_regs l2x0_saved_regs;
 
@@ -367,14 +370,11 @@ void __init l2x0_init(void __iomem *base, u32 aux_val, u32 aux_mask)
 {
 	u32 aux;
 	u32 way_size = 0;
-	int way_size_shift = L2X0_WAY_SIZE_SHIFT;
 	const char *type;
 
 	l2x0_base = base;
-	if (cache_id_part_number_from_dt)
-		l2x0_cache_id = cache_id_part_number_from_dt;
-	else
-		l2x0_cache_id = readl_relaxed(l2x0_base + L2X0_CACHE_ID);
+
+	l2x0_cache_id = readl_relaxed(l2x0_base + L2X0_CACHE_ID);
 	aux = readl_relaxed(l2x0_base + L2X0_AUX_CTRL);
 
 	aux &= aux_mask;
@@ -420,8 +420,7 @@ void __init l2x0_init(void __iomem *base, u32 aux_val, u32 aux_mask)
 	 * L2 cache Size =  Way size * Number of ways
 	 */
 	way_size = (aux & L2X0_AUX_CTRL_WAY_SIZE_MASK) >> 17;
-	way_size = SZ_1K << (way_size + way_size_shift);
-
+	way_size = SZ_1K << (way_size + 3);
 	l2x0_size = l2x0_ways * way_size;
 	l2x0_sets = way_size / CACHE_LINE_SIZE;
 

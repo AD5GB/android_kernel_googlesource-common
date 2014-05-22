@@ -87,7 +87,8 @@ static void		rt6_do_redirect(struct dst_entry *dst, struct sock *sk,
 #ifdef CONFIG_IPV6_ROUTE_INFO
 static struct rt6_info *rt6_add_route_info(struct net_device *dev,
 					   const struct in6_addr *prefix, int prefixlen,
-					   const struct in6_addr *gwaddr, unsigned int pref);
+					   const struct in6_addr *gwaddr,
+					   unsigned pref);
 static struct rt6_info *rt6_get_route_info(struct net_device *dev,
 					   const struct in6_addr *prefix, int prefixlen,
 					   const struct in6_addr *gwaddr);
@@ -881,7 +882,8 @@ restart:
 	dst_hold(&rt->dst);
 	read_unlock_bh(&table->tb6_lock);
 
-	if (!(rt->rt6i_flags & (RTF_NONEXTHOP | RTF_GATEWAY)))
+	if (!dst_get_neighbour_noref_raw(&rt->dst) &&
+	    !(rt->rt6i_flags & (RTF_NONEXTHOP | RTF_LOCAL)))
 		nrt = rt6_alloc_cow(rt, &fl6->daddr, &fl6->saddr);
 	else if (!(rt->dst.flags & DST_HOST))
 		nrt = rt6_alloc_clone(rt, &fl6->daddr);
@@ -1070,10 +1072,13 @@ static void ip6_link_failure(struct sk_buff *skb)
 
 	rt = (struct rt6_info *) skb_dst(skb);
 	if (rt) {
-		if (rt->rt6i_flags & RTF_CACHE)
-			rt6_update_expires(rt, 0);
-		else if (rt->rt6i_node && (rt->rt6i_flags & RTF_DEFAULT))
+		if (rt->rt6i_flags & RTF_CACHE) {
+			dst_hold(&rt->dst);
+			if (ip6_del_rt(rt))
+				dst_free(&rt->dst);
+		} else if (rt->rt6i_node && (rt->rt6i_flags & RTF_DEFAULT)) {
 			rt->rt6i_node->fn_sernum = -1;
+		}
 	}
 }
 
@@ -1582,7 +1587,7 @@ static int __ip6_del_rt(struct rt6_info *rt, struct nl_info *info)
 	write_unlock_bh(&table->tb6_lock);
 
 out:
-	ip6_rt_put(rt);
+	dst_release(&rt->dst);
 	return err;
 }
 
@@ -1827,7 +1832,8 @@ out:
 
 static struct rt6_info *rt6_add_route_info(struct net_device *dev,
 					   const struct in6_addr *prefix, int prefixlen,
-					   const struct in6_addr *gwaddr, unsigned int pref)
+					   const struct in6_addr *gwaddr,
+					   unsigned pref)
 {
 	struct fib6_config cfg = {
 		.fc_table	= addrconf_rt_table(dev, RT6_TABLE_INFO),
@@ -2980,8 +2986,8 @@ static void __net_exit ip6_route_net_exit(struct net *net)
 static int __net_init ip6_route_net_init_late(struct net *net)
 {
 #ifdef CONFIG_PROC_FS
-	proc_create("ipv6_route", 0, net->proc_net, &ipv6_route_proc_fops);
-	proc_create("rt6_stats", S_IRUGO, net->proc_net, &rt6_stats_seq_fops);
+	proc_net_fops_create(net, "ipv6_route", 0, &ipv6_route_proc_fops);
+	proc_net_fops_create(net, "rt6_stats", S_IRUGO, &rt6_stats_seq_fops);
 #endif
 	return 0;
 }
@@ -2989,39 +2995,14 @@ static int __net_init ip6_route_net_init_late(struct net *net)
 static void __net_exit ip6_route_net_exit_late(struct net *net)
 {
 #ifdef CONFIG_PROC_FS
-	remove_proc_entry("ipv6_route", net->proc_net);
-	remove_proc_entry("rt6_stats", net->proc_net);
+	proc_net_remove(net, "ipv6_route");
+	proc_net_remove(net, "rt6_stats");
 #endif
 }
 
 static struct pernet_operations ip6_route_net_ops = {
 	.init = ip6_route_net_init,
 	.exit = ip6_route_net_exit,
-};
-
-static int __net_init ipv6_inetpeer_init(struct net *net)
-{
-	struct inet_peer_base *bp = kmalloc(sizeof(*bp), GFP_KERNEL);
-
-	if (!bp)
-		return -ENOMEM;
-	inet_peer_base_init(bp);
-	net->ipv6.peers = bp;
-	return 0;
-}
-
-static void __net_exit ipv6_inetpeer_exit(struct net *net)
-{
-	struct inet_peer_base *bp = net->ipv6.peers;
-
-	net->ipv6.peers = NULL;
-	inetpeer_invalidate_tree(bp);
-	kfree(bp);
-}
-
-static struct pernet_operations ipv6_inetpeer_ops = {
-	.init	=	ipv6_inetpeer_init,
-	.exit	=	ipv6_inetpeer_exit,
 };
 
 static struct pernet_operations ip6_route_net_late_ops = {

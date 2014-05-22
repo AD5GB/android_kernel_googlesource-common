@@ -48,6 +48,17 @@ extern void thaw_processes(void);
 extern void thaw_kernel_threads(void);
 
 /*
+ * HACK: prevent sleeping while atomic warnings due to ARM signal handling
+ * disabling irqs
+ */
+static inline bool try_to_freeze_nowarn(void)
+{
+	if (likely(!freezing(current)))
+		return false;
+	return __refrigerator(false);
+}
+
+/*
  * DO NOT ADD ANY NEW CALLERS OF THIS FUNCTION
  * If try_to_freeze causes a lockdep warning it means the caller may deadlock
  */
@@ -159,9 +170,10 @@ static inline bool freezer_should_skip(struct task_struct *p)
 }
 
 /*
- * These functions are intended to be used whenever you want allow a sleeping
- * task to be frozen. Note that neither return any clear indication of
- * whether a freeze event happened while in this function.
+ * These functions are intended to be used whenever you want allow a task that's
+ * sleeping in TASK_UNINTERRUPTIBLE or TASK_KILLABLE state to be frozen. Note
+ * that neither return any clear indication of whether a freeze event happened
+ * while in this function.
  */
 
 /* Like schedule(), but should not block the freezer. */

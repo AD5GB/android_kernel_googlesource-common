@@ -87,25 +87,13 @@ cifs_prime_dcache(struct dentry *parent, struct qstr *name,
 		return;
 
 	if (dentry) {
-		int err;
-
 		inode = dentry->d_inode;
-		if (inode) {
-			/*
-			 * If we're generating inode numbers, then we don't
-			 * want to clobber the existing one with the one that
-			 * the readdir code created.
-			 */
-			if (!(cifs_sb->mnt_cifs_flags & CIFS_MOUNT_SERVER_INUM))
-				fattr->cf_uniqueid = CIFS_I(inode)->uniqueid;
-
-			/* update inode in place if i_ino didn't change */
-			if (CIFS_I(inode)->uniqueid == fattr->cf_uniqueid) {
-				cifs_fattr_to_inode(inode, fattr);
-				goto out;
-			}
+		/* update inode in place if i_ino didn't change */
+		if (inode && CIFS_I(inode)->uniqueid == fattr->cf_uniqueid) {
+			cifs_fattr_to_inode(inode, fattr);
+			return dentry;
 		}
-		err = d_invalidate(dentry);
+		d_drop(dentry);
 		dput(dentry);
 		if (err)
 			return;
@@ -306,10 +294,10 @@ ffirst_retry:
 	if (backup_cred(cifs_sb))
 		search_flags |= CIFS_SEARCH_BACKUP_SEARCH;
 
-	rc = server->ops->query_dir_first(xid, tcon, full_path, cifs_sb,
-					  &cifsFile->fid, search_flags,
-					  &cifsFile->srch_inf);
-
+	rc = CIFSFindFirst(xid, pTcon, full_path, cifs_sb->local_nls,
+		&cifsFile->netfid, search_flags, &cifsFile->srch_inf,
+		cifs_sb->mnt_cifs_flags &
+			CIFS_MOUNT_MAP_SPECIAL_CHR, CIFS_DIR_SEP(cifs_sb));
 	if (rc == 0)
 		cifsFile->invalidHandle = false;
 	/* BB add following call to handle readdir on new NTFS symlink errors
@@ -545,9 +533,8 @@ find_cifs_entry(const unsigned int xid, struct cifs_tcon *tcon,
 	int pos_in_buf = 0;
 	loff_t first_entry_in_buffer;
 	loff_t index_to_find = file->f_pos;
-	struct cifsFileInfo *cfile = file->private_data;
+	struct cifsFileInfo *cifsFile = file->private_data;
 	struct cifs_sb_info *cifs_sb = CIFS_SB(file->f_path.dentry->d_sb);
-	struct TCP_Server_Info *server = tcon->ses->server;
 	/* check if index in the buffer */
 
 	if (!server->ops->query_dir_first || !server->ops->query_dir_next)
@@ -606,12 +593,11 @@ find_cifs_entry(const unsigned int xid, struct cifs_tcon *tcon,
 	if (backup_cred(cifs_sb))
 		search_flags |= CIFS_SEARCH_BACKUP_SEARCH;
 
-	while ((index_to_find >= cfile->srch_inf.index_of_last_entry) &&
-	       (rc == 0) && !cfile->srch_inf.endOfSearch) {
-		cifs_dbg(FYI, "calling findnext2\n");
-		rc = server->ops->query_dir_next(xid, tcon, &cfile->fid,
-						 search_flags,
-						 &cfile->srch_inf);
+	while ((index_to_find >= cifsFile->srch_inf.index_of_last_entry) &&
+	      (rc == 0) && !cifsFile->srch_inf.endOfSearch) {
+		cFYI(1, "calling findnext2");
+		rc = CIFSFindNext(xid, pTcon, cifsFile->netfid, search_flags,
+				  &cifsFile->srch_inf);
 		/* FindFirst/Next set last_entry to NULL on malformed reply */
 		if (cfile->srch_inf.last_entry)
 			cifs_save_resume_key(cfile->srch_inf.last_entry, cfile);

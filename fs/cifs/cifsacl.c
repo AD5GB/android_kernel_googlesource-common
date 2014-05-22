@@ -135,15 +135,40 @@ sid_to_key_str(struct cifs_sid *sidptr, unsigned int type)
 	return sidstr;
 }
 
-/*
- * if the two SIDs (roughly equivalent to a UUID for a user or group) are
- * the same returns zero, if they do not match returns non-zero.
- */
-static int
-compare_sids(const struct cifs_sid *ctsid, const struct cifs_sid *cwsid)
+static void
+cifs_copy_sid(struct cifs_sid *dst, const struct cifs_sid *src)
 {
-	int i;
-	int num_subauth, num_sat, num_saw;
+	memcpy(dst, src, sizeof(*dst));
+	dst->num_subauth = min_t(u8, src->num_subauth, NUM_SUBAUTHS);
+}
+
+static void
+id_rb_insert(struct rb_root *root, struct cifs_sid *sidptr,
+		struct cifs_sid_id **psidid, char *typestr)
+{
+	int rc;
+	char *strptr;
+	struct rb_node *node = root->rb_node;
+	struct rb_node *parent = NULL;
+	struct rb_node **linkto = &(root->rb_node);
+	struct cifs_sid_id *lsidid;
+
+	while (node) {
+		lsidid = rb_entry(node, struct cifs_sid_id, rbnode);
+		parent = node;
+		rc = compare_sids(sidptr, &((lsidid)->sid));
+		if (rc > 0) {
+			linkto = &(node->rb_left);
+			node = node->rb_left;
+		} else if (rc < 0) {
+			linkto = &(node->rb_right);
+			node = node->rb_right;
+		}
+	}
+
+	cifs_copy_sid(&(*psidid)->sid, sidptr);
+	(*psidid)->time = jiffies - (SID_MAP_RETRY + 1);
+	(*psidid)->refcount = 0;
 
 	if ((!ctsid) || (!cwsid))
 		return 1;
@@ -233,23 +258,55 @@ id_to_sid(unsigned int cid, uint sidtype, struct cifs_sid *ssid)
 	 * there are no subauthorities and the host has 8-byte pointers, then
 	 * it could be.
 	 */
-	ksid = sidkey->datalen <= sizeof(sidkey->payload) ?
-		(struct cifs_sid *)&sidkey->payload.value :
-		(struct cifs_sid *)sidkey->payload.data;
-
-	ksid_size = CIFS_SID_BASE_SIZE + (ksid->num_subauth * sizeof(__le32));
-	if (ksid_size > sidkey->datalen) {
-		rc = -EIO;
-		cifs_dbg(FYI, "%s: Downcall contained malformed key (datalen=%hu, ksid_size=%u)\n",
-			 __func__, sidkey->datalen, ksid_size);
-		goto invalidate_key;
+	if (test_bit(SID_ID_MAPPED, &psidid->state)) {
+		cifs_copy_sid(ssid, &psidid->sid);
+		psidid->time = jiffies; /* update ts for accessing */
+		goto id_sid_out;
 	}
 
-	cifs_copy_sid(ssid, ksid);
-out_key_put:
-	key_put(sidkey);
-out_revert_creds:
-	revert_creds(saved_cred);
+	if (time_after(psidid->time + SID_MAP_RETRY, jiffies)) {
+		rc = -EINVAL;
+		goto id_sid_out;
+	}
+
+	if (!test_and_set_bit(SID_ID_PENDING, &psidid->state)) {
+		saved_cred = override_creds(root_cred);
+		sidkey = request_key(&cifs_idmap_key_type, psidid->sidstr, "");
+		if (IS_ERR(sidkey)) {
+			rc = -EINVAL;
+			cFYI(1, "%s: Can't map and id to a SID", __func__);
+		} else if (sidkey->datalen < sizeof(struct cifs_sid)) {
+			rc = -EIO;
+			cFYI(1, "%s: Downcall contained malformed key "
+				"(datalen=%hu)", __func__, sidkey->datalen);
+		} else {
+			lsid = (struct cifs_sid *)sidkey->payload.data;
+			cifs_copy_sid(&psidid->sid, lsid);
+			cifs_copy_sid(ssid, &psidid->sid);
+			set_bit(SID_ID_MAPPED, &psidid->state);
+			key_put(sidkey);
+			kfree(psidid->sidstr);
+		}
+		psidid->time = jiffies; /* update ts for accessing */
+		revert_creds(saved_cred);
+		clear_bit(SID_ID_PENDING, &psidid->state);
+		wake_up_bit(&psidid->state, SID_ID_PENDING);
+	} else {
+		rc = wait_on_bit(&psidid->state, SID_ID_PENDING,
+				sidid_pending_wait, TASK_INTERRUPTIBLE);
+		if (rc) {
+			cFYI(1, "%s: sidid_pending_wait interrupted %d",
+					__func__, rc);
+			--psidid->refcount;
+			return rc;
+		}
+		if (test_bit(SID_ID_MAPPED, &psidid->state))
+			cifs_copy_sid(ssid, &psidid->sid);
+		else
+			rc = -EINVAL;
+	}
+id_sid_out:
+	--psidid->refcount;
 	return rc;
 
 invalidate_key:

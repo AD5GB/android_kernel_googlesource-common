@@ -952,6 +952,9 @@ static void garmin_close(struct usb_serial_port *port)
 		__func__, port->number, garmin_data_p->mode,
 		garmin_data_p->state, garmin_data_p->flags);
 
+	if (!serial)
+		return;
+
 	garmin_clear(garmin_data_p);
 
 	/* shutdown our urbs */

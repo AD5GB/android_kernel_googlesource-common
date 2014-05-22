@@ -35,6 +35,11 @@
 #define BT_DBG(D...)
 #endif
 
+#ifndef CONFIG_BT_SOCK_DEBUG
+#undef  BT_DBG
+#define BT_DBG(D...)
+#endif
+
 #define VERSION "2.16"
 
 /* Bluetooth sockets */
@@ -107,6 +112,28 @@ void bt_sock_unregister(int proto)
 	write_unlock(&bt_proto_lock);
 }
 EXPORT_SYMBOL(bt_sock_unregister);
+
+#ifdef CONFIG_PARANOID_NETWORK
+static inline int current_has_bt_admin(void)
+{
+	return !current_euid();
+}
+
+static inline int current_has_bt(void)
+{
+	return current_has_bt_admin();
+}
+# else
+static inline int current_has_bt_admin(void)
+{
+	return 1;
+}
+
+static inline int current_has_bt(void)
+{
+	return 1;
+}
+#endif
 
 #ifdef CONFIG_PARANOID_NETWORK
 static inline int current_has_bt_admin(void)

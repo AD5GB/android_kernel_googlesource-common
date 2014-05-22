@@ -532,10 +532,13 @@ static int tun_attach(struct tun_struct *tun, struct file *file)
 	rcu_assign_pointer(tun->tfiles[tun->numqueues], tfile);
 	tun->numqueues++;
 
-	if (tfile->detached)
-		tun_enable_queue(tfile);
-	else
-		sock_hold(&tfile->sk);
+static void __tun_detach(struct tun_struct *tun)
+{
+	/* Detach from net device */
+	netif_tx_lock_bh(tun->dev);
+	netif_carrier_off(tun->dev);
+	tun->tfile = NULL;
+	netif_tx_unlock_bh(tun->dev);
 
 	tun_set_real_num_queues(tun);
 
@@ -687,7 +690,25 @@ static const struct ethtool_ops tun_ethtool_ops;
 /* Net device detach from fd. */
 static void tun_net_uninit(struct net_device *dev)
 {
-	tun_detach_all(dev);
+	struct tun_struct *tun = netdev_priv(dev);
+	struct tun_file *tfile = tun->tfile;
+
+	/* Inform the methods they need to stop using the dev.
+	 */
+	if (tfile) {
+		wake_up_all(&tun->wq.wait);
+		if (atomic_dec_and_test(&tfile->count))
+			__tun_detach(tun);
+	}
+}
+
+static void tun_free_netdev(struct net_device *dev)
+{
+	struct tun_struct *tun = netdev_priv(dev);
+
+	BUG_ON(!test_bit(SOCK_EXTERNALLY_ALLOCATED, &tun->socket.flags));
+
+	sk_release_kernel(tun->socket.sk);
 }
 
 /* Net device open. */
@@ -1053,8 +1074,9 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 	u32 rxhash;
 
 	if (!(tun->flags & TUN_NO_PI)) {
-		if ((len -= sizeof(pi)) > total_len)
+		if (len < sizeof(pi))
 			return -EINVAL;
+		len -= sizeof(pi);
 
 		if (memcpy_fromiovecend((void *)&pi, iv, 0, sizeof(pi)))
 			return -EFAULT;
@@ -1062,8 +1084,9 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 	}
 
 	if (tun->flags & TUN_VNET_HDR) {
-		if ((len -= tun->vnet_hdr_sz) > total_len)
+		if (len < tun->vnet_hdr_sz)
 			return -EINVAL;
+		len -= tun->vnet_hdr_sz;
 
 		if (memcpy_fromiovecend((void *)&gso, iv, offset, sizeof(gso)))
 			return -EFAULT;
@@ -1650,6 +1673,7 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 		tun->flags = flags;
 		tun->txflt.count = 0;
 		tun->vnet_hdr_sz = sizeof(struct virtio_net_hdr);
+		set_bit(SOCK_EXTERNALLY_ALLOCATED, &tun->socket.flags);
 
 		tun->filter_attached = false;
 		tun->sndbuf = tfile->socket.sk->sk_sndbuf;
@@ -1870,7 +1894,7 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 	}
 #endif
 
-	if (cmd == TUNSETIFF || cmd == TUNSETQUEUE || _IOC_TYPE(cmd) == 0x89) {
+	if (cmd == TUNSETIFF || _IOC_TYPE(cmd) == 0x89) {
 		if (copy_from_user(&ifr, argp, ifreq_len))
 			return -EFAULT;
 	} else {

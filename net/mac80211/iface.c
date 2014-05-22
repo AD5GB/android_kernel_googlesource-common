@@ -855,7 +855,19 @@ static void ieee80211_do_stop(struct ieee80211_sub_if_data *sdata,
 		rcu_assign_pointer(local->p2p_sdata, NULL);
 		/* fall through */
 	default:
-		cancel_work_sync(&sdata->work);
+		mutex_lock(&local->mtx);
+		if (local->hw_roc_dev == sdata->dev &&
+		    local->hw_roc_channel) {
+			/* ignore return value since this is racy */
+			drv_cancel_remain_on_channel(local);
+			ieee80211_queue_work(&local->hw, &local->hw_roc_done);
+		}
+		mutex_unlock(&local->mtx);
+
+		flush_work(&local->hw_roc_start);
+		flush_work(&local->hw_roc_done);
+
+		flush_work(&sdata->work);
 		/*
 		 * When we get here, the interface is marked down.
 		 *

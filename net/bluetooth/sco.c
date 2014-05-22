@@ -179,8 +179,7 @@ static int sco_connect(struct sock *sk)
 		pkt_type &= SCO_ESCO_MASK;
 	}
 
-	hcon = hci_connect(hdev, type, pkt_type, dst, BDADDR_BREDR,
-			   BT_SECURITY_LOW, HCI_AT_NO_BONDING);
+	hcon = hci_connect(hdev, type, pkt_type, dst, BT_SECURITY_LOW, HCI_AT_NO_BONDING);
 	if (IS_ERR(hcon)) {
 		err = PTR_ERR(hcon);
 		goto done;
@@ -452,9 +451,10 @@ static int sco_sock_bind(struct socket *sock, struct sockaddr *addr, int alen)
 {
 	struct sockaddr_sco sa;
 	struct sock *sk = sock->sk;
+	bdaddr_t *src = &sa.sco_bdaddr;
 	int len, err = 0;
 
-	BT_DBG("sk %p %pMR", sk, &sa.sco_bdaddr);
+	BT_DBG("sk %p %s", sk, batostr(&sa.sco_bdaddr));
 
 	if (!addr || addr->sa_family != AF_BLUETOOTH)
 		return -EINVAL;
@@ -470,9 +470,15 @@ static int sco_sock_bind(struct socket *sock, struct sockaddr *addr, int alen)
 		goto done;
 	}
 
-	if (sk->sk_type != SOCK_SEQPACKET) {
-		err = -EINVAL;
-		goto done;
+	write_lock(&sco_sk_list.lock);
+
+	if (bacmp(src, BDADDR_ANY) && __sco_get_sock_by_addr(src)) {
+		err = -EADDRINUSE;
+	} else {
+		/* Save source address */
+		bacpy(&bt_sk(sk)->src, &sa.sco_bdaddr);
+		sco_pi(sk)->pkt_type = sa.sco_pkt_type;
+		sk->sk_state = BT_BOUND;
 	}
 
 	bacpy(&bt_sk(sk)->src, &sa.sco_bdaddr);
@@ -489,7 +495,7 @@ static int sco_sock_connect(struct socket *sock, struct sockaddr *addr, int alen
 {
 	struct sock *sk = sock->sk;
 	struct sockaddr_sco sa;
-	int len, err;
+	int len, err = 0;
 
 	BT_DBG("sk %p", sk);
 

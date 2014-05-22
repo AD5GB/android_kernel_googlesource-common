@@ -137,7 +137,6 @@ struct stack_frame {
 	__tlb_flush_mm(current->mm);					\
 	crst_table_downgrade(current->mm, 1UL << 31);			\
 	update_mm(current->mm, current);				\
-	execve_tail();							\
 } while (0)
 
 /* Forward declaration, a strange C thing */

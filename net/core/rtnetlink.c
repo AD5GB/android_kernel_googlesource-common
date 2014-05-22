@@ -1353,6 +1353,7 @@ static int do_setlink(struct net_device *dev, struct ifinfomsg *ifm,
 		if (err)
 			goto errout;
 		modified = 1;
+		add_device_randomness(dev->dev_addr, dev->addr_len);
 	}
 
 	if (tb[IFLA_MTU]) {
@@ -2649,6 +2650,27 @@ static int rtnetlink_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 		}
 		rtnl_lock();
 		return err;
+	}
+
+	memset(rta_buf, 0, (rtattr_max * sizeof(struct rtattr *)));
+
+	min_len = rtm_min[sz_idx];
+	if (nlh->nlmsg_len < min_len)
+		return -EINVAL;
+
+	if (nlh->nlmsg_len > min_len) {
+		int attrlen = nlh->nlmsg_len - NLMSG_ALIGN(min_len);
+		struct rtattr *attr = (void *)nlh + NLMSG_ALIGN(min_len);
+
+		while (RTA_OK(attr, attrlen)) {
+			unsigned int flavor = attr->rta_type & NLA_TYPE_MASK;
+			if (flavor) {
+				if (flavor > rta_max[sz_idx])
+					return -EINVAL;
+				rta_buf[flavor-1] = attr;
+			}
+			attr = RTA_NEXT(attr, attrlen);
+		}
 	}
 
 	doit = rtnl_get_doit(family, type);

@@ -193,7 +193,8 @@ static inline struct frag_queue *fq_find(struct net *net, __be32 id,
 		inet_frag_maybe_warn_overflow(q, pr_fmt());
 		return NULL;
 	}
-	return container_of(q, struct frag_queue, q);
+
+	return container_of(q, struct nf_ct_frag6_queue, q);
 }
 
 

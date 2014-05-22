@@ -32,8 +32,8 @@
  *  At the moment of writing this notes identifier of IP packets is generated
  *  to be unpredictable using this code only for packets subjected
  *  (actually or potentially) to defragmentation.  I.e. DF packets less than
- *  PMTU in size uses a constant ID and do not use this code (see
- *  ip_select_ident() in include/net/ip.h).
+ *  PMTU in size when local fragmentation is disabled use a constant ID and do
+ *  not use this code (see ip_select_ident() in include/net/ip.h).
  *
  *  Route cache entries hold references to our nodes.
  *  New cache entries get references via lookup by destination IP address in
@@ -586,6 +586,17 @@ static void inetpeer_inval_rcu(struct rcu_head *head)
 	schedule_delayed_work(&gc_work, gc_delay);
 }
 
+void inetpeer_invalidate_tree(int family)
+{
+	struct inet_peer *p = container_of(head, struct inet_peer, gc_rcu);
+
+	spin_lock_bh(&gc_lock);
+	list_add_tail(&p->gc_list, &gc_list);
+	spin_unlock_bh(&gc_lock);
+
+	schedule_delayed_work(&gc_work, gc_delay);
+}
+
 void inetpeer_invalidate_tree(struct inet_peer_base *base)
 {
 	struct inet_peer *root;
@@ -596,7 +607,7 @@ void inetpeer_invalidate_tree(struct inet_peer_base *base)
 	if (root != peer_avl_empty) {
 		base->root = peer_avl_empty_rcu;
 		base->total = 0;
-		call_rcu(&root->gc_rcu, inetpeer_inval_rcu);
+		call_rcu(&prev->gc_rcu, inetpeer_inval_rcu);
 	}
 
 	write_sequnlock_bh(&base->lock);

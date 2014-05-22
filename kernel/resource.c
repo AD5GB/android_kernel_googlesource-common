@@ -814,7 +814,7 @@ static void __init __reserve_region_with_split(struct resource *root,
 {
 	struct resource *parent = root;
 	struct resource *conflict;
-	struct resource *res = alloc_resource(GFP_ATOMIC);
+	struct resource *res = kzalloc(sizeof(*res), GFP_ATOMIC);
 	struct resource *next_res = NULL;
 
 	if (!res)
@@ -839,7 +839,7 @@ static void __init __reserve_region_with_split(struct resource *root,
 		/* conflict covered whole area */
 		if (conflict->start <= res->start &&
 				conflict->end >= res->end) {
-			free_resource(res);
+			kfree(res);
 			WARN_ON(next_res);
 			break;
 		}
@@ -849,9 +849,10 @@ static void __init __reserve_region_with_split(struct resource *root,
 			end = res->end;
 			res->end = conflict->start - 1;
 			if (conflict->end < end) {
-				next_res = alloc_resource(GFP_ATOMIC);
+				next_res = kzalloc(sizeof(*next_res),
+						GFP_ATOMIC);
 				if (!next_res) {
-					free_resource(res);
+					kfree(res);
 					break;
 				}
 				next_res->name = name;

@@ -32,6 +32,7 @@
 
 #include "device.h"
 
+/*---------------------  Export Definitions -------------------------*/
 typedef struct tagSINTData {
 	u8 byTSR0;
 	u8 byPkt0;

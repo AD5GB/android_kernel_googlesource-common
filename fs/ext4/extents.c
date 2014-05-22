@@ -57,46 +57,6 @@
 #define EXT4_EXT_DATA_VALID1	0x8  /* first half contains valid data */
 #define EXT4_EXT_DATA_VALID2	0x10 /* second half contains valid data */
 
-static __le32 ext4_extent_block_csum(struct inode *inode,
-				     struct ext4_extent_header *eh)
-{
-	struct ext4_inode_info *ei = EXT4_I(inode);
-	struct ext4_sb_info *sbi = EXT4_SB(inode->i_sb);
-	__u32 csum;
-
-	csum = ext4_chksum(sbi, ei->i_csum_seed, (__u8 *)eh,
-			   EXT4_EXTENT_TAIL_OFFSET(eh));
-	return cpu_to_le32(csum);
-}
-
-static int ext4_extent_block_csum_verify(struct inode *inode,
-					 struct ext4_extent_header *eh)
-{
-	struct ext4_extent_tail *et;
-
-	if (!EXT4_HAS_RO_COMPAT_FEATURE(inode->i_sb,
-		EXT4_FEATURE_RO_COMPAT_METADATA_CSUM))
-		return 1;
-
-	et = find_ext4_extent_tail(eh);
-	if (et->et_checksum != ext4_extent_block_csum(inode, eh))
-		return 0;
-	return 1;
-}
-
-static void ext4_extent_block_csum_set(struct inode *inode,
-				       struct ext4_extent_header *eh)
-{
-	struct ext4_extent_tail *et;
-
-	if (!EXT4_HAS_RO_COMPAT_FEATURE(inode->i_sb,
-		EXT4_FEATURE_RO_COMPAT_METADATA_CSUM))
-		return;
-
-	et = find_ext4_extent_tail(eh);
-	et->et_checksum = ext4_extent_block_csum(inode, eh);
-}
-
 static int ext4_split_extent(handle_t *handle,
 				struct inode *inode,
 				struct ext4_ext_path *path,
@@ -2666,7 +2626,7 @@ int ext4_ext_remove_space(struct inode *inode, ext4_lblk_t start,
 	struct ext4_ext_path *path = NULL;
 	ext4_fsblk_t partial_cluster = 0;
 	handle_t *handle;
-	int i = 0, err = 0;
+	int i = 0, err;
 
 	ext_debug("truncate since %u to %u\n", start, end);
 
@@ -2699,13 +2659,10 @@ again:
 		/* Leaf not may not exist only if inode has no blocks at all */
 		ex = path[depth].p_ext;
 		if (!ex) {
-			if (depth) {
-				EXT4_ERROR_INODE(inode,
-						 "path[%d].p_hdr == NULL",
-						 depth);
-				err = -EIO;
-			}
-			goto out;
+			ext4_ext_drop_refs(path);
+			kfree(path);
+			path = NULL;
+			goto cont;
 		}
 
 		ee_block = le32_to_cpu(ex->ee_block);
@@ -3057,29 +3014,12 @@ static int ext4_split_extent_at(handle_t *handle,
 	err = ext4_ext_insert_extent(handle, inode, path, &newex, flags);
 	if (err == -ENOSPC && (EXT4_EXT_MAY_ZEROOUT & split_flag)) {
 		if (split_flag & (EXT4_EXT_DATA_VALID1|EXT4_EXT_DATA_VALID2)) {
-			if (split_flag & EXT4_EXT_DATA_VALID1) {
+			if (split_flag & EXT4_EXT_DATA_VALID1)
 				err = ext4_ext_zeroout(inode, ex2);
-				zero_ex.ee_block = ex2->ee_block;
-				zero_ex.ee_len = cpu_to_le16(
-						ext4_ext_get_actual_len(ex2));
-				ext4_ext_store_pblock(&zero_ex,
-						      ext4_ext_pblock(ex2));
-			} else {
+			else
 				err = ext4_ext_zeroout(inode, ex);
-				zero_ex.ee_block = ex->ee_block;
-				zero_ex.ee_len = cpu_to_le16(
-						ext4_ext_get_actual_len(ex));
-				ext4_ext_store_pblock(&zero_ex,
-						      ext4_ext_pblock(ex));
-			}
-		} else {
+		} else
 			err = ext4_ext_zeroout(inode, &orig_ex);
-			zero_ex.ee_block = orig_ex.ee_block;
-			zero_ex.ee_len = cpu_to_le16(
-						ext4_ext_get_actual_len(&orig_ex));
-			ext4_ext_store_pblock(&zero_ex,
-					      ext4_ext_pblock(&orig_ex));
-		}
 
 		if (err)
 			goto fix_extent_len;
@@ -3168,8 +3108,9 @@ static int ext4_split_extent(handle_t *handle,
 	split_flag1 = 0;
 
 	if (map->m_lblk >= ee_block) {
-		split_flag1 = split_flag & EXT4_EXT_DATA_VALID2;
-		if (uninitialized) {
+		split_flag1 = split_flag & (EXT4_EXT_MAY_ZEROOUT |
+					    EXT4_EXT_DATA_VALID2);
+		if (uninitialized)
 			split_flag1 |= EXT4_EXT_MARK_UNINIT1;
 			split_flag1 |= split_flag & (EXT4_EXT_MAY_ZEROOUT |
 						     EXT4_EXT_MARK_UNINIT2);
@@ -3525,19 +3466,8 @@ static int ext4_convert_unwritten_extents_endio(handle_t *handle,
 		"block %llu, max_blocks %u\n", inode->i_ino,
 		  (unsigned long long)ee_block, ee_len);
 
-	/* If extent is larger than requested it is a clear sign that we still
-	 * have some extent state machine issues left. So extent_split is still
-	 * required.
-	 * TODO: Once all related issues will be fixed this situation should be
-	 * illegal.
-	 */
+	/* If extent is larger than requested then split is required */
 	if (ee_block != map->m_lblk || ee_len > map->m_len) {
-#ifdef EXT4_DEBUG
-		ext4_warning("Inode (%ld) finished: extent logical block %llu,"
-			     " len %u; IO logical block %llu, len %u\n",
-			     inode->i_ino, (unsigned long long)ee_block, ee_len,
-			     (unsigned long long)map->m_lblk, map->m_len);
-#endif
 		err = ext4_split_unwritten_extents(handle, inode, map, path,
 						   EXT4_GET_BLOCKS_CONVERT);
 		if (err < 0)
@@ -4659,7 +4589,7 @@ static int ext4_xattr_fiemap(struct inode *inode,
 		error = ext4_get_inode_loc(inode, &iloc);
 		if (error)
 			return error;
-		physical = iloc.bh->b_blocknr << blockbits;
+		physical = (__u64)iloc.bh->b_blocknr << blockbits;
 		offset = EXT4_GOOD_OLD_INODE_SIZE +
 				EXT4_I(inode)->i_extra_isize;
 		physical += offset;
@@ -4667,7 +4597,7 @@ static int ext4_xattr_fiemap(struct inode *inode,
 		flags |= FIEMAP_EXTENT_DATA_INLINE;
 		brelse(iloc.bh);
 	} else { /* external block */
-		physical = EXT4_I(inode)->i_file_acl << blockbits;
+		physical = (__u64)EXT4_I(inode)->i_file_acl << blockbits;
 		length = inode->i_sb->s_blocksize;
 	}
 

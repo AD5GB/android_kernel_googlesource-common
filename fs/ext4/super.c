@@ -3065,44 +3065,6 @@ static void ext4_destroy_lazyinit_thread(void)
 	kthread_stop(ext4_lazyinit_task);
 }
 
-static int set_journal_csum_feature_set(struct super_block *sb)
-{
-	int ret = 1;
-	int compat, incompat;
-	struct ext4_sb_info *sbi = EXT4_SB(sb);
-
-	if (EXT4_HAS_RO_COMPAT_FEATURE(sb,
-				       EXT4_FEATURE_RO_COMPAT_METADATA_CSUM)) {
-		/* journal checksum v2 */
-		compat = 0;
-		incompat = JBD2_FEATURE_INCOMPAT_CSUM_V2;
-	} else {
-		/* journal checksum v1 */
-		compat = JBD2_FEATURE_COMPAT_CHECKSUM;
-		incompat = 0;
-	}
-
-	if (test_opt(sb, JOURNAL_ASYNC_COMMIT)) {
-		ret = jbd2_journal_set_features(sbi->s_journal,
-				compat, 0,
-				JBD2_FEATURE_INCOMPAT_ASYNC_COMMIT |
-				incompat);
-	} else if (test_opt(sb, JOURNAL_CHECKSUM)) {
-		ret = jbd2_journal_set_features(sbi->s_journal,
-				compat, 0,
-				incompat);
-		jbd2_journal_clear_features(sbi->s_journal, 0, 0,
-				JBD2_FEATURE_INCOMPAT_ASYNC_COMMIT);
-	} else {
-		jbd2_journal_clear_features(sbi->s_journal,
-				JBD2_FEATURE_COMPAT_CHECKSUM, 0,
-				JBD2_FEATURE_INCOMPAT_ASYNC_COMMIT |
-				JBD2_FEATURE_INCOMPAT_CSUM_V2);
-	}
-
-	return ret;
-}
-
 /*
  * Note: calculating the overhead so we can be compatible with
  * historical BSD practice is quite difficult in the face of
@@ -3182,6 +3144,7 @@ int ext4_calculate_overhead(struct super_block *sb)
 	ext4_fsblk_t overhead = 0;
 	char *buf = (char *) get_zeroed_page(GFP_KERNEL);
 
+	memset(buf, 0, PAGE_SIZE);
 	if (!buf)
 		return -ENOMEM;
 
@@ -3208,47 +3171,9 @@ int ext4_calculate_overhead(struct super_block *sb)
 			memset(buf, 0, PAGE_SIZE);
 		cond_resched();
 	}
-	/* Add the journal blocks as well */
-	if (sbi->s_journal)
-		overhead += EXT4_NUM_B2C(sbi, sbi->s_journal->j_maxlen);
-
 	sbi->s_overhead = overhead;
 	smp_wmb();
 	free_page((unsigned long) buf);
-	return 0;
-}
-
-
-static ext4_fsblk_t ext4_calculate_resv_clusters(struct ext4_sb_info *sbi)
-{
-	ext4_fsblk_t resv_clusters;
-
-	/*
-	 * By default we reserve 2% or 4096 clusters, whichever is smaller.
-	 * This should cover the situations where we can not afford to run
-	 * out of space like for example punch hole, or converting
-	 * uninitialized extents in delalloc path. In most cases such
-	 * allocation would require 1, or 2 blocks, higher numbers are
-	 * very rare.
-	 */
-	resv_clusters = ext4_blocks_count(sbi->s_es) >> sbi->s_cluster_bits;
-
-	do_div(resv_clusters, 50);
-	resv_clusters = min_t(ext4_fsblk_t, resv_clusters, 4096);
-
-	return resv_clusters;
-}
-
-
-static int ext4_reserve_clusters(struct ext4_sb_info *sbi, ext4_fsblk_t count)
-{
-	ext4_fsblk_t clusters = ext4_blocks_count(sbi->s_es) >>
-				sbi->s_cluster_bits;
-
-	if (count >= clusters)
-		return -EINVAL;
-
-	atomic64_set(&sbi->s_resv_clusters, count);
 	return 0;
 }
 
@@ -3451,7 +3376,7 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 		}
 		if (test_opt(sb, DIOREAD_NOLOCK)) {
 			ext4_msg(sb, KERN_ERR, "can't mount with "
-				 "both data=journal and delalloc");
+				 "both data=journal and dioread_nolock");
 			goto failed_mount;
 		}
 		if (test_opt(sb, DELALLOC))
@@ -3906,8 +3831,8 @@ no_journal:
 	if (es->s_overhead_clusters)
 		sbi->s_overhead = le32_to_cpu(es->s_overhead_clusters);
 	else {
-		err = ext4_calculate_overhead(sb);
-		if (err)
+		ret = ext4_calculate_overhead(sb);
+		if (ret)
 			goto failed_mount_wq;
 	}
 
@@ -4652,6 +4577,21 @@ static int ext4_remount(struct super_block *sb, int *flags, char *data)
 		goto restore_opts;
 	}
 
+	if (test_opt(sb, DATA_FLAGS) == EXT4_MOUNT_JOURNAL_DATA) {
+		if (test_opt2(sb, EXPLICIT_DELALLOC)) {
+			ext4_msg(sb, KERN_ERR, "can't mount with "
+				 "both data=journal and delalloc");
+			err = -EINVAL;
+			goto restore_opts;
+		}
+		if (test_opt(sb, DIOREAD_NOLOCK)) {
+			ext4_msg(sb, KERN_ERR, "can't mount with "
+				 "both data=journal and dioread_nolock");
+			err = -EINVAL;
+			goto restore_opts;
+		}
+	}
+
 	if (sbi->s_mount_flags & EXT4_MF_FS_ABORTED)
 		ext4_abort(sb, "Abort forced by user");
 
@@ -4814,7 +4754,7 @@ static int ext4_statfs(struct dentry *dentry, struct kstatfs *buf)
 	struct super_block *sb = dentry->d_sb;
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
 	struct ext4_super_block *es = sbi->s_es;
-	ext4_fsblk_t overhead = 0, resv_blocks;
+	ext4_fsblk_t overhead = 0;
 	u64 fsid;
 	s64 bfree;
 	resv_blocks = EXT4_C2B(sbi, atomic64_read(&sbi->s_resv_clusters));
@@ -4824,7 +4764,7 @@ static int ext4_statfs(struct dentry *dentry, struct kstatfs *buf)
 
 	buf->f_type = EXT4_SUPER_MAGIC;
 	buf->f_bsize = sb->s_blocksize;
-	buf->f_blocks = ext4_blocks_count(es) - EXT4_C2B(sbi, overhead);
+	buf->f_blocks = ext4_blocks_count(es) - EXT4_C2B(sbi, sbi->s_overhead);
 	bfree = percpu_counter_sum_positive(&sbi->s_freeclusters_counter) -
 		percpu_counter_sum_positive(&sbi->s_dirtyclusters_counter);
 	/* prevent underflow in case that few free space is available */

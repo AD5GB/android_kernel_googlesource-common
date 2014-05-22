@@ -648,6 +648,9 @@ static u32 se_dev_align_max_sectors(u32 max_sectors, u32 block_size)
 	return aligned_max_sectors;
 }
 
+	return aligned_max_sectors;
+}
+
 int se_dev_set_max_unmap_lba_count(
 	struct se_device *dev,
 	u32 max_unmap_lba_count)
@@ -971,9 +974,9 @@ int se_dev_set_queue_depth(struct se_device *dev, u32 queue_depth)
 
 int se_dev_set_fabric_max_sectors(struct se_device *dev, u32 fabric_max_sectors)
 {
-	int block_size = dev->dev_attrib.block_size;
+	int block_size = dev->se_sub_dev->se_dev_attrib.block_size;
 
-	if (dev->export_count) {
+	if (atomic_read(&dev->dev_export_obj.obj_access_count)) {
 		pr_err("dev[%p]: Unable to change SE Device"
 			" fabric_max_sectors while export_count is %d\n",
 			dev, dev->export_count);
@@ -1562,9 +1565,14 @@ int core_dev_setup_virtual_lun0(void)
 	sprintf(buf, "rd_pages=8");
 	hba->transport->set_configfs_dev_params(dev, buf, sizeof(buf));
 
-	ret = target_configure_device(dev);
-	if (ret)
-		goto out_free_se_dev;
+	dev = t->create_virtdevice(hba, se_dev, se_dev->se_dev_su_ptr);
+	if (IS_ERR(dev)) {
+		ret = PTR_ERR(dev);
+		goto out;
+	}
+	dev->dev_link_magic = SE_DEV_LINK_MAGIC;
+	se_dev->se_dev_ptr = dev;
+	g_lun0_dev = dev;
 
 	lun0_hba = hba;
 	g_lun0_dev = dev;

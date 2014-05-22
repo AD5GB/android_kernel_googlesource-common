@@ -743,6 +743,9 @@ int RFbSetPower(struct vnt_private *pDevice, u32 uRATE, u32 uCH)
 	if (uCH == 0)
 		return -EINVAL;
 
+	if (uCH == 0)
+		return -EINVAL;
+
     switch (uRATE) {
     case RATE_1M:
     case RATE_2M:

@@ -362,6 +362,149 @@ int disallow_signal(int sig)
 
 EXPORT_SYMBOL(disallow_signal);
 
+/*
+ *	Put all the gunge required to become a kernel thread without
+ *	attached user resources in one place where it belongs.
+ */
+
+void daemonize(const char *name, ...)
+{
+	va_list args;
+	sigset_t blocked;
+
+	va_start(args, name);
+	vsnprintf(current->comm, sizeof(current->comm), name, args);
+	va_end(args);
+
+	/*
+	 * If we were started as result of loading a module, close all of the
+	 * user space pages.  We don't need them, and if we didn't close them
+	 * they would be locked into memory.
+	 */
+	exit_mm(current);
+	/*
+	 * We don't want to get frozen, in case system-wide hibernation
+	 * or suspend transition begins right now.
+	 */
+	current->flags |= (PF_NOFREEZE | PF_KTHREAD);
+
+	if (current->nsproxy != &init_nsproxy) {
+		get_nsproxy(&init_nsproxy);
+		switch_task_namespaces(current, &init_nsproxy);
+	}
+	set_special_pids(&init_struct_pid);
+	proc_clear_tty(current);
+
+	/* Block and flush all signals */
+	sigfillset(&blocked);
+	sigprocmask(SIG_BLOCK, &blocked, NULL);
+	flush_signals(current);
+
+	/* Become as one with the init task */
+
+	daemonize_fs_struct();
+	exit_files(current);
+	current->files = init_task.files;
+	atomic_inc(&current->files->count);
+
+	reparent_to_kthreadd();
+}
+
+EXPORT_SYMBOL(daemonize);
+
+static void close_files(struct files_struct * files)
+{
+	int i, j;
+	struct fdtable *fdt;
+
+	j = 0;
+
+	/*
+	 * It is safe to dereference the fd table without RCU or
+	 * ->file_lock because this is the last reference to the
+	 * files structure.  But use RCU to shut RCU-lockdep up.
+	 */
+	rcu_read_lock();
+	fdt = files_fdtable(files);
+	rcu_read_unlock();
+	for (;;) {
+		unsigned long set;
+		i = j * BITS_PER_LONG;
+		if (i >= fdt->max_fds)
+			break;
+		set = fdt->open_fds[j++];
+		while (set) {
+			if (set & 1) {
+				struct file * file = xchg(&fdt->fd[i], NULL);
+				if (file) {
+					filp_close(file, files);
+					cond_resched();
+				}
+			}
+			i++;
+			set >>= 1;
+		}
+	}
+}
+
+struct files_struct *get_files_struct(struct task_struct *task)
+{
+	struct files_struct *files;
+
+	task_lock(task);
+	files = task->files;
+	if (files)
+		atomic_inc(&files->count);
+	task_unlock(task);
+
+	return files;
+}
+
+void put_files_struct(struct files_struct *files)
+{
+	struct fdtable *fdt;
+
+	if (atomic_dec_and_test(&files->count)) {
+		close_files(files);
+		/*
+		 * Free the fd and fdset arrays if we expanded them.
+		 * If the fdtable was embedded, pass files for freeing
+		 * at the end of the RCU grace period. Otherwise,
+		 * you can free files immediately.
+		 */
+		rcu_read_lock();
+		fdt = files_fdtable(files);
+		if (fdt != &files->fdtab)
+			kmem_cache_free(files_cachep, files);
+		free_fdtable(fdt);
+		rcu_read_unlock();
+	}
+}
+
+void reset_files_struct(struct files_struct *files)
+{
+	struct task_struct *tsk = current;
+	struct files_struct *old;
+
+	old = tsk->files;
+	task_lock(tsk);
+	tsk->files = files;
+	task_unlock(tsk);
+	put_files_struct(old);
+}
+
+void exit_files(struct task_struct *tsk)
+{
+	struct files_struct * files = tsk->files;
+
+	if (files) {
+		task_lock(tsk);
+		tsk->files = NULL;
+		task_unlock(tsk);
+		put_files_struct(files);
+	}
+}
+
 #ifdef CONFIG_MM_OWNER
 /*
  * A task is exiting.   If it owned this mm, find a new owner for the mm.

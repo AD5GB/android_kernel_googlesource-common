@@ -46,9 +46,6 @@ static DEFINE_PER_CPU(bool, hard_watchdog_warn);
 static DEFINE_PER_CPU(bool, watchdog_nmi_touch);
 static DEFINE_PER_CPU(unsigned long, hrtimer_interrupts_saved);
 #endif
-#ifdef CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU
-static cpumask_t __read_mostly watchdog_cpus;
-#endif
 #ifdef CONFIG_HARDLOCKUP_DETECTOR_NMI
 static DEFINE_PER_CPU(struct perf_event *, watchdog_ev);
 #endif
@@ -123,7 +120,7 @@ static unsigned long get_timestamp(void)
 	return local_clock() >> 30LL;  /* 2^30 ~= 10^9 */
 }
 
-static void set_sample_period(void)
+static u64 get_sample_period(void)
 {
 	/*
 	 * convert watchdog_thresh from seconds to ns
@@ -132,7 +129,7 @@ static void set_sample_period(void)
 	 * and hard thresholds) to increment before the
 	 * hardlockup detector generates a warning
 	 */
-	sample_period = get_softlockup_thresh() * ((u64)NSEC_PER_SEC / 5);
+	return get_softlockup_thresh() * ((u64)NSEC_PER_SEC / 5);
 }
 
 /* Commands for resetting the watchdog */
@@ -198,22 +195,7 @@ static int is_hardlockup(void)
 #endif
 
 #ifdef CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU
-static unsigned int watchdog_next_cpu(unsigned int cpu)
-{
-	cpumask_t cpus = watchdog_cpus;
-	unsigned int next_cpu;
-
-	next_cpu = cpumask_next(cpu, &cpus);
-	if (next_cpu >= nr_cpu_ids)
-		next_cpu = cpumask_first(&cpus);
-
-	if (next_cpu == cpu)
-		return nr_cpu_ids;
-
-	return next_cpu;
-}
-
-static int is_hardlockup_other_cpu(unsigned int cpu)
+static int is_hardlockup_other_cpu(int cpu)
 {
 	unsigned long hrint = per_cpu(hrtimer_interrupts, cpu);
 
@@ -226,7 +208,7 @@ static int is_hardlockup_other_cpu(unsigned int cpu)
 
 static void watchdog_check_hardlockup_other_cpu(void)
 {
-	unsigned int next_cpu;
+	int cpu;
 
 	/*
 	 * Test for hardlockups every 3 samples.  The sample period is
@@ -237,30 +219,30 @@ static void watchdog_check_hardlockup_other_cpu(void)
 		return;
 
 	/* check for a hardlockup on the next cpu */
-	next_cpu = watchdog_next_cpu(smp_processor_id());
-	if (next_cpu >= nr_cpu_ids)
+	cpu = cpumask_next(smp_processor_id(), cpu_online_mask);
+	if (cpu >= nr_cpu_ids)
+		cpu = cpumask_first(cpu_online_mask);
+	if (cpu == smp_processor_id())
 		return;
 
-	smp_rmb();
-
-	if (per_cpu(watchdog_nmi_touch, next_cpu) == true) {
-		per_cpu(watchdog_nmi_touch, next_cpu) = false;
+	if (per_cpu(watchdog_nmi_touch, cpu) == true) {
+		per_cpu(watchdog_nmi_touch, cpu) = false;
 		return;
 	}
 
-	if (is_hardlockup_other_cpu(next_cpu)) {
+	if (is_hardlockup_other_cpu(cpu)) {
 		/* only warn once */
-		if (per_cpu(hard_watchdog_warn, next_cpu) == true)
+		if (per_cpu(hard_watchdog_warn, cpu) == true)
 			return;
 
 		if (hardlockup_panic)
-			panic("Watchdog detected hard LOCKUP on cpu %u", next_cpu);
+			panic("Watchdog detected hard LOCKUP on cpu %d", cpu);
 		else
-			WARN(1, "Watchdog detected hard LOCKUP on cpu %u", next_cpu);
+			WARN(1, "Watchdog detected hard LOCKUP on cpu %d", cpu);
 
-		per_cpu(hard_watchdog_warn, next_cpu) = true;
+		per_cpu(hard_watchdog_warn, cpu) = true;
 	} else {
-		per_cpu(hard_watchdog_warn, next_cpu) = false;
+		per_cpu(hard_watchdog_warn, cpu) = false;
 	}
 }
 #else
@@ -326,8 +308,9 @@ static void watchdog_overflow_callback(struct perf_event *event,
 	__this_cpu_write(hard_watchdog_warn, false);
 	return;
 }
-#endif /* CONFIG_HARDLOCKUP_DETECTOR_NMI */
+#endif
 
+#ifdef CONFIG_HARDLOCKUP_DETECTOR
 static void watchdog_interrupt_count(void)
 {
 	__this_cpu_inc(hrtimer_interrupts);
@@ -458,30 +441,8 @@ static int watchdog_should_run(unsigned int cpu)
 		__this_cpu_read(soft_lockup_hrtimer_cnt);
 }
 
-/*
- * The watchdog thread function - touches the timestamp.
- *
- * It only runs once every sample_period seconds (4 seconds by
- * default) to reset the softlockup timestamp. If this gets delayed
- * for more than 2*watchdog_thresh seconds then the debug-printout
- * triggers in watchdog_timer_fn().
- */
-static void watchdog(unsigned int cpu)
-{
-	__this_cpu_write(soft_lockup_hrtimer_cnt,
-			 __this_cpu_read(hrtimer_interrupts));
-	__touch_watchdog();
-}
-
 #ifdef CONFIG_HARDLOCKUP_DETECTOR_NMI
-/*
- * People like the simple clean cpu node info on boot.
- * Reduce the watchdog noise by only printing messages
- * that are different from what cpu0 displayed.
- */
-static unsigned long cpu0_err;
-
-static int watchdog_nmi_enable(unsigned int cpu)
+static int watchdog_nmi_enable(int cpu)
 {
 	struct perf_event_attr *wd_attr;
 	struct perf_event *event = per_cpu(watchdog_ev, cpu);
@@ -552,6 +513,13 @@ static void watchdog_nmi_disable(unsigned int cpu)
 #ifdef CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU
 static int watchdog_nmi_enable(unsigned int cpu)
 {
+	struct hrtimer *hrtimer = &per_cpu(watchdog_hrtimer, cpu);
+
+	WARN_ON(per_cpu(softlockup_watchdog, cpu));
+	hrtimer_init(hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	hrtimer->function = watchdog_timer_fn;
+
+#ifdef CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU
 	/*
 	 * The new cpu will be marked online before the first hrtimer interrupt
 	 * runs on it.  If another cpu tests for a hardlockup on the new cpu
@@ -561,9 +529,42 @@ static int watchdog_nmi_enable(unsigned int cpu)
 	 * cpu.
 	 */
 	per_cpu(watchdog_nmi_touch, cpu) = true;
-	smp_wmb();
-	cpumask_set_cpu(cpu, &watchdog_cpus);
-	return 0;
+#endif
+}
+
+static int watchdog_enable(int cpu)
+{
+	struct task_struct *p = per_cpu(softlockup_watchdog, cpu);
+	int err = 0;
+
+	/* enable the perf event */
+	err = watchdog_nmi_enable(cpu);
+
+	/* Regardless of err above, fall through and start softlockup */
+
+	/* create the watchdog thread */
+	if (!p) {
+		struct sched_param param = { .sched_priority = MAX_RT_PRIO-1 };
+		p = kthread_create_on_node(watchdog, NULL, cpu_to_node(cpu), "watchdog/%d", cpu);
+		if (IS_ERR(p)) {
+			pr_err("softlockup watchdog for %i failed\n", cpu);
+			if (!err) {
+				/* if hardlockup hasn't already set this */
+				err = PTR_ERR(p);
+				/* and disable the perf event */
+				watchdog_nmi_disable(cpu);
+			}
+			goto out;
+		}
+		sched_setscheduler(p, SCHED_FIFO, &param);
+		kthread_bind(p, cpu);
+		per_cpu(watchdog_touch_ts, cpu) = 0;
+		per_cpu(softlockup_watchdog, cpu) = p;
+		wake_up_process(p);
+	}
+
+out:
+	return err;
 }
 
 static void watchdog_nmi_disable(unsigned int cpu)

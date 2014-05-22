@@ -141,7 +141,21 @@ static void proc_dump_substream_status(struct snd_usb_substream *subs, struct sn
 		snd_iprintf(buffer, "  Status: Running\n");
 		snd_iprintf(buffer, "    Interface = %d\n", subs->interface);
 		snd_iprintf(buffer, "    Altset = %d\n", subs->altset_idx);
-		proc_dump_ep_status(subs, subs->data_endpoint, subs->sync_endpoint, buffer);
+		snd_iprintf(buffer, "    URBs = %d [ ", subs->nurbs);
+		for (i = 0; i < subs->nurbs; i++)
+			snd_iprintf(buffer, "%d ", subs->dataurb[i].packets);
+		snd_iprintf(buffer, "]\n");
+		snd_iprintf(buffer, "    Packet Size = %d\n", subs->curpacksize);
+		snd_iprintf(buffer, "    Momentary freq = %u Hz (%#x.%04x)\n",
+			    subs->speed == USB_SPEED_FULL
+			    ? get_full_speed_hz(subs->freqm)
+			    : get_high_speed_hz(subs->freqm),
+			    subs->freqm >> 16, subs->freqm & 0xffff);
+		if (subs->freqshift != INT_MIN)
+			snd_iprintf(buffer, "    Feedback Format = %d.%d\n",
+				    (subs->syncmaxsize > 3 ? 32 : 24)
+						- (16 - subs->freqshift),
+				    16 - subs->freqshift);
 	} else {
 		snd_iprintf(buffer, "  Status: Stop\n");
 	}

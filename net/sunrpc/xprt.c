@@ -1134,36 +1134,7 @@ void xprt_reserve(struct rpc_task *task)
 
 	task->tk_timeout = 0;
 	task->tk_status = -EAGAIN;
-	rcu_read_lock();
-	xprt = rcu_dereference(task->tk_client->cl_xprt);
-	if (!xprt_throttle_congested(xprt, task))
-		xprt->ops->alloc_slot(xprt, task);
-	rcu_read_unlock();
-}
-
-/**
- * xprt_retry_reserve - allocate an RPC request slot
- * @task: RPC task requesting a slot allocation
- *
- * If no more slots are available, place the task on the transport's
- * backlog queue.
- * Note that the only difference with xprt_reserve is that we now
- * ignore the value of the XPRT_CONGESTED flag.
- */
-void xprt_retry_reserve(struct rpc_task *task)
-{
-	struct rpc_xprt	*xprt;
-
-	task->tk_status = 0;
-	if (task->tk_rqstp != NULL)
-		return;
-
-	task->tk_timeout = 0;
-	task->tk_status = -EAGAIN;
-	rcu_read_lock();
-	xprt = rcu_dereference(task->tk_client->cl_xprt);
 	xprt->ops->alloc_slot(xprt, task);
-	rcu_read_unlock();
 }
 
 static inline __be32 xprt_alloc_xid(struct rpc_xprt *xprt)

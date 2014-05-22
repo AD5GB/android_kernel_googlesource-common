@@ -1059,13 +1059,6 @@ static enum version_8192c _rtl92ce_read_chip_version(struct ieee80211_hw *hw)
 				   ? CHIP_VENDOR_UMC_B_CUT : CHIP_UNKNOWN) |
 				   CHIP_VENDOR_UMC));
 		}
-		if (IS_92C_SERIAL(version)) {
-			value32 = rtl_read_dword(rtlpriv, REG_HPON_FSM);
-			version = (enum version_8192c)(version |
-				   ((CHIP_BONDING_IDENTIFIER(value32)
-				   == CHIP_BONDING_92C_1T2R) ?
-				   RF_TYPE_1T2R : 0));
-		}
 	}
 
 	switch (version) {

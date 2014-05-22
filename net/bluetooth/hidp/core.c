@@ -754,9 +754,8 @@ static int hidp_setup_hid(struct hidp_session *session,
 	hid->country = req->country;
 
 	strncpy(hid->name, req->name, sizeof(req->name) - 1);
-
-	snprintf(hid->phys, sizeof(hid->phys), "%pMR",
-		 &bt_sk(session->ctrl_sock->sk)->src);
+	strncpy(hid->phys, batostr(&bt_sk(session->ctrl_sock->sk)->src), 64);
+	strncpy(hid->uniq, batostr(&bt_sk(session->ctrl_sock->sk)->dst), 64);
 
 	snprintf(hid->uniq, sizeof(hid->uniq), "%pMR",
 		 &bt_sk(session->ctrl_sock->sk)->dst);

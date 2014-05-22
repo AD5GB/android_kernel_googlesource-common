@@ -639,29 +639,3 @@ void mwifiex_11n_cleanup_reorder_tbl(struct mwifiex_private *priv)
 	INIT_LIST_HEAD(&priv->rx_reorder_tbl_ptr);
 	mwifiex_reset_11n_rx_seq_num(priv);
 }
-
-/*
- * This function updates all rx_reorder_tbl's flags.
- */
-void mwifiex_update_rxreor_flags(struct mwifiex_adapter *adapter, u8 flags)
-{
-	struct mwifiex_private *priv;
-	struct mwifiex_rx_reorder_tbl *tbl;
-	unsigned long lock_flags;
-	int i;
-
-	for (i = 0; i < adapter->priv_num; i++) {
-		priv = adapter->priv[i];
-		if (!priv)
-			continue;
-		if (list_empty(&priv->rx_reorder_tbl_ptr))
-			continue;
-
-		spin_lock_irqsave(&priv->rx_reorder_tbl_lock, lock_flags);
-		list_for_each_entry(tbl, &priv->rx_reorder_tbl_ptr, list)
-			tbl->flags = flags;
-		spin_unlock_irqrestore(&priv->rx_reorder_tbl_lock, lock_flags);
-	}
-
-	return;
-}

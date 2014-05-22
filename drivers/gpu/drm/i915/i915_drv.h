@@ -372,9 +372,7 @@ struct intel_device_info {
 	u8 is_broadwater:1;
 	u8 is_crestline:1;
 	u8 is_ivybridge:1;
-	u8 is_valleyview:1;
 	u8 has_force_wake:1;
-	u8 is_haswell:1;
 	u8 has_fbc:1;
 	u8 has_pipe_cxsr:1;
 	u8 has_hotplug:1;
@@ -490,7 +488,7 @@ enum intel_sbi_destination {
 
 #define QUIRK_PIPEA_FORCE (1<<0)
 #define QUIRK_LVDS_SSC_DISABLE (1<<1)
-#define QUIRK_INVERT_BRIGHTNESS (1<<2)
+#define QUIRK_NO_PCH_PWM_ENABLE (1<<2)
 
 struct intel_fbdev;
 struct intel_fbc_work;
@@ -504,7 +502,142 @@ struct intel_gmbus {
 	struct drm_i915_private *dev_priv;
 };
 
-struct i915_suspend_saved_registers {
+typedef struct drm_i915_private {
+	struct drm_device *dev;
+
+	const struct intel_device_info *info;
+
+	int has_gem;
+	int relative_constants_mode;
+
+	void __iomem *regs;
+	/** gt_fifo_count and the subsequent register write are synchronized
+	 * with dev->struct_mutex. */
+	unsigned gt_fifo_count;
+	/** forcewake_count is protected by gt_lock */
+	unsigned forcewake_count;
+	/** gt_lock is also taken in irq contexts. */
+	struct spinlock gt_lock;
+
+	struct intel_gmbus *gmbus;
+
+	/** gmbus_mutex protects against concurrent usage of the single hw gmbus
+	 * controller on different i2c buses. */
+	struct mutex gmbus_mutex;
+
+	struct pci_dev *bridge_dev;
+	struct intel_ring_buffer ring[I915_NUM_RINGS];
+	uint32_t next_seqno;
+
+	drm_dma_handle_t *status_page_dmah;
+	uint32_t counter;
+	drm_local_map_t hws_map;
+	struct drm_i915_gem_object *pwrctx;
+	struct drm_i915_gem_object *renderctx;
+
+	struct resource mch_res;
+
+	unsigned int cpp;
+	int back_offset;
+	int front_offset;
+	int current_page;
+	int page_flipping;
+
+	atomic_t irq_received;
+
+	/* protects the irq masks */
+	spinlock_t irq_lock;
+	/** Cached value of IMR to avoid reads in updating the bitfield */
+	u32 pipestat[2];
+	u32 irq_mask;
+	u32 gt_irq_mask;
+	u32 pch_irq_mask;
+
+	u32 hotplug_supported_mask;
+	struct work_struct hotplug_work;
+
+	int tex_lru_log_granularity;
+	int allow_batchbuffer;
+	unsigned int sr01, adpa, ppcr, dvob, dvoc, lvds;
+	int vblank_pipe;
+	int num_pipe;
+
+	/* For hangcheck timer */
+#define DRM_I915_HANGCHECK_PERIOD 1500 /* in ms */
+	struct timer_list hangcheck_timer;
+	int hangcheck_count;
+	uint32_t last_acthd;
+	uint32_t last_acthd_bsd;
+	uint32_t last_acthd_blt;
+	uint32_t last_instdone;
+	uint32_t last_instdone1;
+
+	unsigned long cfb_size;
+	unsigned int cfb_fb;
+	enum plane cfb_plane;
+	int cfb_y;
+	struct intel_fbc_work *fbc_work;
+
+	struct intel_opregion opregion;
+
+	/* overlay */
+	struct intel_overlay *overlay;
+	bool sprite_scaling_enabled;
+
+	/* LVDS info */
+	int backlight_level;  /* restore backlight to this value */
+	bool backlight_enabled;
+	struct drm_display_mode *lfp_lvds_vbt_mode; /* if any */
+	struct drm_display_mode *sdvo_lvds_vbt_mode; /* if any */
+
+	/* Feature bits from the VBIOS */
+	unsigned int int_tv_support:1;
+	unsigned int lvds_dither:1;
+	unsigned int lvds_vbt:1;
+	unsigned int int_crt_support:1;
+	unsigned int lvds_use_ssc:1;
+	unsigned int display_clock_mode:1;
+	int lvds_ssc_freq;
+	unsigned int bios_lvds_val; /* initial [PCH_]LVDS reg val in VBIOS */
+	unsigned int lvds_val; /* used for checking LVDS channel mode */
+	struct {
+		int rate;
+		int lanes;
+		int preemphasis;
+		int vswing;
+
+		bool initialized;
+		bool support;
+		int bpp;
+		struct edp_power_seq pps;
+	} edp;
+	bool no_aux_handshake;
+
+	struct notifier_block lid_notifier;
+
+	int crt_ddc_pin;
+	struct drm_i915_fence_reg fence_regs[I915_MAX_NUM_FENCES]; /* assume 965 */
+	int fence_reg_start; /* 4 if userland hasn't ioctl'd us yet */
+	int num_fence_regs; /* 8 on pre-965, 16 otherwise */
+
+	unsigned int fsb_freq, mem_freq, is_ddr3;
+
+	spinlock_t error_lock;
+	struct drm_i915_error_state *first_error;
+	struct work_struct error_work;
+	struct completion error_completion;
+	struct workqueue_struct *wq;
+
+	/* Display functions */
+	struct drm_i915_display_funcs display;
+
+	/* PCH chipset type */
+	enum intel_pch pch_type;
+
+	unsigned long quirks;
+
+	/* Register state */
+	bool modeset_on_lid;
 	u8 saveLBB;
 	u32 saveDSPACNTR;
 	u32 saveDSPBCNTR;
@@ -1396,6 +1529,8 @@ struct drm_i915_file_private {
 
 #define GT_FREQUENCY_MULTIPLIER 50
 
+#define HAS_FORCE_WAKE(dev) (INTEL_INFO(dev)->has_force_wake)
+
 #include "i915_trace.h"
 
 /**
@@ -1882,11 +2017,6 @@ extern void intel_display_print_error_state(struct seq_file *m,
 void gen6_gt_force_wake_get(struct drm_i915_private *dev_priv);
 void gen6_gt_force_wake_put(struct drm_i915_private *dev_priv);
 int __gen6_gt_wait_for_fifo(struct drm_i915_private *dev_priv);
-
-int sandybridge_pcode_read(struct drm_i915_private *dev_priv, u8 mbox, u32 *val);
-int sandybridge_pcode_write(struct drm_i915_private *dev_priv, u8 mbox, u32 val);
-int valleyview_punit_read(struct drm_i915_private *dev_priv, u8 addr, u32 *val);
-int valleyview_punit_write(struct drm_i915_private *dev_priv, u8 addr, u32 val);
 
 #define __i915_read(x, y) \
 	u##x i915_read##x(struct drm_i915_private *dev_priv, u32 reg);

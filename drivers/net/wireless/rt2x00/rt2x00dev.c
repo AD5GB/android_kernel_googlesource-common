@@ -719,8 +719,8 @@ void rt2x00lib_rxdone(struct queue_entry *entry, gfp_t gfp)
 	 */
 	if (unlikely(rxdesc.size == 0 ||
 		     rxdesc.size > entry->queue->data_size)) {
-		rt2x00_err(rt2x00dev, "Wrong frame size %d max %d\n",
-			   rxdesc.size, entry->queue->data_size);
+		ERROR(rt2x00dev, "Wrong frame size %d max %d.\n",
+			rxdesc.size, entry->queue->data_size);
 		dev_kfree_skb(entry->skb);
 		goto renew_skb;
 	}

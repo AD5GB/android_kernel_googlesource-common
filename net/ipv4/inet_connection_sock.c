@@ -451,10 +451,7 @@ struct dst_entry *inet_csk_route_child_sock(struct sock *sk,
 	struct rtable *rt;
 
 	fl4 = &newinet->cork.fl.u.ip4;
-
-	rcu_read_lock();
-	opt = rcu_dereference(newinet->inet_opt);
-	flowi4_init_output(fl4, sk->sk_bound_dev_if, inet_rsk(req)->ir_mark,
+	flowi4_init_output(fl4, sk->sk_bound_dev_if, ireq->ir_mark,
 			   RT_CONN_FLAGS(sk), RT_SCOPE_UNIVERSE,
 			   sk->sk_protocol, inet_sk_flowi_flags(sk),
 			   (opt && opt->opt.srr) ? opt->opt.faddr : ireq->rmt_addr,
@@ -737,7 +734,6 @@ EXPORT_SYMBOL(inet_csk_destroy_sock);
  * tcp/dccp_create_openreq_child().
  */
 void inet_csk_prepare_forced_close(struct sock *sk)
-	__releases(&sk->sk_lock.slock)
 {
 	/* sk_clone_lock locked the socket and set refcnt to 2 */
 	bh_unlock_sock(sk);

@@ -75,25 +75,11 @@ struct eth_dev *gether_setup_name(struct usb_gadget *g, u8 ethaddr[ETH_ALEN],
 		const char *netname);
 
 /* netdev setup/teardown as directed by the gadget driver */
-/* gether_setup - initialize one ethernet-over-usb link
- * @g: gadget to associated with these links
- * @ethaddr: NULL, or a buffer in which the ethernet address of the
- *	host side of the link is recorded
- * Context: may sleep
- *
- * This sets up the single network link that may be exported by a
- * gadget driver using this framework.  The link layer addresses are
- * set up using module parameters.
- *
- * Returns negative errno, or zero on success
- */
-static inline struct eth_dev *gether_setup(struct usb_gadget *g,
-		u8 ethaddr[ETH_ALEN])
-{
-	return gether_setup_name(g, ethaddr, "usb");
-}
-
-void gether_cleanup(struct eth_dev *dev);
+int gether_setup(struct usb_gadget *g, u8 ethaddr[ETH_ALEN]);
+void gether_cleanup(void);
+/* variant of gether_setup that allows customizing network device name */
+int gether_setup_name(struct usb_gadget *g, u8 ethaddr[ETH_ALEN],
+		const char *netname);
 
 /* connect/disconnect is handled by individual functions */
 struct net_device *gether_connect(struct gether *);
@@ -123,14 +109,22 @@ int eem_bind_config(struct usb_configuration *c, struct eth_dev *dev);
 
 #ifdef USB_ETH_RNDIS
 
+int rndis_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN]);
 int rndis_bind_config_vendor(struct usb_configuration *c, u8 ethaddr[ETH_ALEN],
-		u32 vendorID, const char *manufacturer, struct eth_dev *dev);
+				u32 vendorID, const char *manufacturer);
 
 #else
 
 static inline int
 rndis_bind_config_vendor(struct usb_configuration *c, u8 ethaddr[ETH_ALEN],
 		u32 vendorID, const char *manufacturer, struct eth_dev *dev)
+{
+	return 0;
+}
+
+static inline int
+rndis_bind_config_vendor(struct usb_configuration *c, u8 ethaddr[ETH_ALEN],
+				u32 vendorID, const char *manufacturer)
 {
 	return 0;
 }

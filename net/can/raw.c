@@ -712,8 +712,6 @@ static int raw_sendmsg(struct kiocb *iocb, struct socket *sock,
 	if (err < 0)
 		goto free_skb;
 
-	sock_tx_timestamp(sk, &skb_shinfo(skb)->tx_flags);
-
 	skb->dev = dev;
 	skb->sk  = sk;
 

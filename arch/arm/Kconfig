@@ -477,7 +477,7 @@ config ARCH_IXP4XX
 	select ARCH_REQUIRE_GPIOLIB
 	select CLKSRC_MMIO
 	select CPU_XSCALE
-	select DMABOUNCE if PCI
+	select ARCH_REQUIRE_GPIOLIB
 	select GENERIC_CLOCKEVENTS
 	select MIGHT_HAVE_PCI
 	select NEED_MACH_IO_H
@@ -502,6 +502,9 @@ config ARCH_DOVE
 
 config ARCH_KIRKWOOD
 	bool "Marvell Kirkwood"
+	select CPU_FEROCEON
+	select PCI
+	select PCI_QUIRKS
 	select ARCH_REQUIRE_GPIOLIB
 	select CPU_FEROCEON
 	select GENERIC_CLOCKEVENTS
@@ -1346,16 +1349,6 @@ config ARM_ERRATA_775420
 	 to deadlock. This workaround puts DSB before executing ISB if
 	 an abort may occur on cache maintenance.
 
-config ARM_ERRATA_798181
-	bool "ARM errata: TLBI/DSB failure on Cortex-A15"
-	depends on CPU_V7 && SMP
-	help
-	  On Cortex-A15 (r0p0..r3p2) the TLBI*IS/DSB operations are not
-	  adequately shooting down all use of the old entries. This
-	  option enables the Linux kernel workaround for this erratum
-	  which sends an IPI to the CPUs that are running the same ASID
-	  as the one being invalidated.
-
 endmenu
 
 source "arch/arm/common/Kconfig"
@@ -1828,6 +1821,15 @@ config ARM_FLUSH_CONSOLE_ON_RESTART
 	  released if it failed to be acquired, which will cause all the
 	  pending messages to be flushed.
 
+config ARM_FLUSH_CONSOLE_ON_RESTART
+	bool "Force flush the console on restart"
+	help
+	  If the console is locked while the system is rebooted, the messages
+	  in the temporary logbuffer would not have propogated to all the
+	  console drivers. This option forces the console lock to be
+	  released if it failed to be acquired, which will cause all the
+	  pending messages to be flushed.
+
 endmenu
 
 menu "Boot options"
@@ -1839,23 +1841,6 @@ config USE_OF
 	select OF_EARLY_FLATTREE
 	help
 	  Include support for flattened device tree machine descriptions.
-
-config ATAGS
-	bool "Support for the traditional ATAGS boot data passing" if USE_OF
-	default y
-	help
-	  This is the traditional way of passing data to the kernel at boot
-	  time. If you are solely relying on the flattened device tree (or
-	  the ARM_ATAG_DTB_COMPAT option) then you may unselect this option
-	  to remove ATAGS support from your kernel binary.  If unsure,
-	  leave this to y.
-
-config DEPRECATED_PARAM_STRUCT
-	bool "Provide old way to pass kernel parameters"
-	depends on ATAGS
-	help
-	  This was deprecated in 2001 and announced to live on for 5 years.
-	  Some old boot loaders still use this way.
 
 config BUILD_ARM_APPENDED_DTB_IMAGE
 	bool "Build a concatenated zImage/dtb by default"
@@ -2102,6 +2087,37 @@ menu "CPU Power Management"
 
 if ARCH_HAS_CPUFREQ
 source "drivers/cpufreq/Kconfig"
+
+config CPU_FREQ_IMX
+	tristate "CPUfreq driver for i.MX CPUs"
+	depends on ARCH_MXC && CPU_FREQ
+	select CPU_FREQ_TABLE
+	help
+	  This enables the CPUfreq driver for i.MX CPUs.
+
+config CPU_FREQ_SA1100
+	bool
+
+config CPU_FREQ_SA1110
+	bool
+
+config CPU_FREQ_INTEGRATOR
+	tristate "CPUfreq driver for ARM Integrator CPUs"
+	depends on ARCH_INTEGRATOR && CPU_FREQ
+	default y
+	help
+	  This enables the CPUfreq driver for ARM Integrator CPUs.
+
+	  For details, take a look at <file:Documentation/cpu-freq>.
+
+	  If in doubt, say Y.
+
+config CPU_FREQ_PXA
+	bool
+	depends on CPU_FREQ && ARCH_PXA && PXA25x
+	default y
+	select CPU_FREQ_TABLE
+	select CPU_FREQ_DEFAULT_GOV_USERSPACE
 
 config CPU_FREQ_S3C
 	bool

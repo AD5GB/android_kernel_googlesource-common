@@ -34,109 +34,10 @@ static struct radeon_atpx_priv {
 	bool atpx_detected;
 	/* handle for device - and atpx */
 	acpi_handle dhandle;
-	struct radeon_atpx atpx;
+	acpi_handle atpx_handle;
 } radeon_atpx_priv;
 
-struct atpx_verify_interface {
-	u16 size;		/* structure size in bytes (includes size field) */
-	u16 version;		/* version */
-	u32 function_bits;	/* supported functions bit vector */
-} __packed;
-
-struct atpx_px_params {
-	u16 size;		/* structure size in bytes (includes size field) */
-	u32 valid_flags;	/* which flags are valid */
-	u32 flags;		/* flags */
-} __packed;
-
-struct atpx_power_control {
-	u16 size;
-	u8 dgpu_state;
-} __packed;
-
-struct atpx_mux {
-	u16 size;
-	u16 mux;
-} __packed;
-
-/**
- * radeon_atpx_call - call an ATPX method
- *
- * @handle: acpi handle
- * @function: the ATPX function to execute
- * @params: ATPX function params
- *
- * Executes the requested ATPX function (all asics).
- * Returns a pointer to the acpi output buffer.
- */
-static union acpi_object *radeon_atpx_call(acpi_handle handle, int function,
-					   struct acpi_buffer *params)
-{
-	acpi_status status;
-	union acpi_object atpx_arg_elements[2];
-	struct acpi_object_list atpx_arg;
-	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
-
-	atpx_arg.count = 2;
-	atpx_arg.pointer = &atpx_arg_elements[0];
-
-	atpx_arg_elements[0].type = ACPI_TYPE_INTEGER;
-	atpx_arg_elements[0].integer.value = function;
-
-	if (params) {
-		atpx_arg_elements[1].type = ACPI_TYPE_BUFFER;
-		atpx_arg_elements[1].buffer.length = params->length;
-		atpx_arg_elements[1].buffer.pointer = params->pointer;
-	} else {
-		/* We need a second fake parameter */
-		atpx_arg_elements[1].type = ACPI_TYPE_INTEGER;
-		atpx_arg_elements[1].integer.value = 0;
-	}
-
-	status = acpi_evaluate_object(handle, NULL, &atpx_arg, &buffer);
-
-	/* Fail only if calling the method fails and ATPX is supported */
-	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
-		printk("failed to evaluate ATPX got %s\n",
-		       acpi_format_exception(status));
-		kfree(buffer.pointer);
-		return NULL;
-	}
-
-	return buffer.pointer;
-}
-
-/**
- * radeon_atpx_parse_functions - parse supported functions
- *
- * @f: supported functions struct
- * @mask: supported functions mask from ATPX
- *
- * Use the supported functions mask from ATPX function
- * ATPX_FUNCTION_VERIFY_INTERFACE to determine what functions
- * are supported (all asics).
- */
-static void radeon_atpx_parse_functions(struct radeon_atpx_functions *f, u32 mask)
-{
-	f->px_params = mask & ATPX_GET_PX_PARAMETERS_SUPPORTED;
-	f->power_cntl = mask & ATPX_POWER_CONTROL_SUPPORTED;
-	f->disp_mux_cntl = mask & ATPX_DISPLAY_MUX_CONTROL_SUPPORTED;
-	f->i2c_mux_cntl = mask & ATPX_I2C_MUX_CONTROL_SUPPORTED;
-	f->switch_start = mask & ATPX_GRAPHICS_DEVICE_SWITCH_START_NOTIFICATION_SUPPORTED;
-	f->switch_end = mask & ATPX_GRAPHICS_DEVICE_SWITCH_END_NOTIFICATION_SUPPORTED;
-	f->disp_connectors_mapping = mask & ATPX_GET_DISPLAY_CONNECTORS_MAPPING_SUPPORTED;
-	f->disp_detetion_ports = mask & ATPX_GET_DISPLAY_DETECTION_PORTS_SUPPORTED;
-}
-
-/**
- * radeon_atpx_validate_functions - validate ATPX functions
- *
- * @atpx: radeon atpx struct
- *
- * Validate that required functions are enabled (all asics).
- * returns 0 on success, error on failure.
- */
-static int radeon_atpx_validate(struct radeon_atpx *atpx)
+static int radeon_atpx_get_version(acpi_handle handle)
 {
 	/* make sure required functions are enabled */
 	/* dGPU power control is required */
@@ -452,7 +353,7 @@ static bool radeon_atpx_pci_probe_handle(struct pci_dev *pdev)
 		return false;
 
 	radeon_atpx_priv.dhandle = dhandle;
-	radeon_atpx_priv.atpx.handle = atpx_handle;
+	radeon_atpx_priv.atpx_handle = atpx_handle;
 	return true;
 }
 

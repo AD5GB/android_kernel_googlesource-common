@@ -2052,7 +2052,8 @@ static void wm8904_handle_pdata(struct snd_soc_codec *codec)
 static int wm8904_probe(struct snd_soc_codec *codec)
 {
 	struct wm8904_priv *wm8904 = snd_soc_codec_get_drvdata(codec);
-	int ret;
+	struct wm8904_pdata *pdata = wm8904->pdata;
+	int ret, i;
 
 	codec->control_data = wm8904->regmap;
 
@@ -2073,6 +2074,107 @@ static int wm8904_probe(struct snd_soc_codec *codec)
 		dev_err(codec->dev, "Failed to set cache I/O: %d\n", ret);
 		return ret;
 	}
+
+	for (i = 0; i < ARRAY_SIZE(wm8904->supplies); i++)
+		wm8904->supplies[i].supply = wm8904_supply_names[i];
+
+	ret = regulator_bulk_get(codec->dev, ARRAY_SIZE(wm8904->supplies),
+				 wm8904->supplies);
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to request supplies: %d\n", ret);
+		return ret;
+	}
+
+	ret = regulator_bulk_enable(ARRAY_SIZE(wm8904->supplies),
+				    wm8904->supplies);
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to enable supplies: %d\n", ret);
+		goto err_get;
+	}
+
+	ret = snd_soc_read(codec, WM8904_SW_RESET_AND_ID);
+	if (ret < 0) {
+		dev_err(codec->dev, "Failed to read ID register\n");
+		goto err_enable;
+	}
+	if (ret != 0x8904) {
+		dev_err(codec->dev, "Device is not a WM8904, ID is %x\n", ret);
+		ret = -EINVAL;
+		goto err_enable;
+	}
+
+	ret = snd_soc_read(codec, WM8904_REVISION);
+	if (ret < 0) {
+		dev_err(codec->dev, "Failed to read device revision: %d\n",
+			ret);
+		goto err_enable;
+	}
+	dev_info(codec->dev, "revision %c\n", ret + 'A');
+
+	ret = wm8904_reset(codec);
+	if (ret < 0) {
+		dev_err(codec->dev, "Failed to issue reset\n");
+		goto err_enable;
+	}
+
+	/* Change some default settings - latch VU and enable ZC */
+	snd_soc_update_bits(codec, WM8904_ADC_DIGITAL_VOLUME_LEFT,
+			    WM8904_ADC_VU, WM8904_ADC_VU);
+	snd_soc_update_bits(codec, WM8904_ADC_DIGITAL_VOLUME_RIGHT,
+			    WM8904_ADC_VU, WM8904_ADC_VU);
+	snd_soc_update_bits(codec, WM8904_DAC_DIGITAL_VOLUME_LEFT,
+			    WM8904_DAC_VU, WM8904_DAC_VU);
+	snd_soc_update_bits(codec, WM8904_DAC_DIGITAL_VOLUME_RIGHT,
+			    WM8904_DAC_VU, WM8904_DAC_VU);
+	snd_soc_update_bits(codec, WM8904_ANALOGUE_OUT1_LEFT,
+			    WM8904_HPOUT_VU | WM8904_HPOUTLZC,
+			    WM8904_HPOUT_VU | WM8904_HPOUTLZC);
+	snd_soc_update_bits(codec, WM8904_ANALOGUE_OUT1_RIGHT,
+			    WM8904_HPOUT_VU | WM8904_HPOUTRZC,
+			    WM8904_HPOUT_VU | WM8904_HPOUTRZC);
+	snd_soc_update_bits(codec, WM8904_ANALOGUE_OUT2_LEFT,
+			    WM8904_LINEOUT_VU | WM8904_LINEOUTLZC,
+			    WM8904_LINEOUT_VU | WM8904_LINEOUTLZC);
+	snd_soc_update_bits(codec, WM8904_ANALOGUE_OUT2_RIGHT,
+			    WM8904_LINEOUT_VU | WM8904_LINEOUTRZC,
+			    WM8904_LINEOUT_VU | WM8904_LINEOUTRZC);
+	snd_soc_update_bits(codec, WM8904_CLOCK_RATES_0,
+			    WM8904_SR_MODE, 0);
+
+	/* Apply configuration from the platform data. */
+	if (wm8904->pdata) {
+		for (i = 0; i < WM8904_GPIO_REGS; i++) {
+			if (!pdata->gpio_cfg[i])
+				continue;
+
+			regmap_update_bits(wm8904->regmap,
+					   WM8904_GPIO_CONTROL_1 + i,
+					   0xffff,
+					   pdata->gpio_cfg[i]);
+		}
+
+		/* Zero is the default value for these anyway */
+		for (i = 0; i < WM8904_MIC_REGS; i++)
+			regmap_update_bits(wm8904->regmap,
+					   WM8904_MIC_BIAS_CONTROL_0 + i,
+					   0xffff,
+					   pdata->mic_cfg[i]);
+	}
+
+	/* Set Class W by default - this will be managed by the Class
+	 * G widget at runtime where bypass paths are available.
+	 */
+	snd_soc_update_bits(codec, WM8904_CLASS_W_0,
+			    WM8904_CP_DYN_PWR, WM8904_CP_DYN_PWR);
+
+	/* Use normal bias source */
+	snd_soc_update_bits(codec, WM8904_BIAS_CONTROL_0,
+			    WM8904_POBCTRL, 0);
+
+	wm8904_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
+
+	/* Bias level configuration will have done an extra enable */
+	regulator_bulk_disable(ARRAY_SIZE(wm8904->supplies), wm8904->supplies);
 
 	wm8904_handle_pdata(codec);
 

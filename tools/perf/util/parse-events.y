@@ -1,7 +1,7 @@
-%pure-parser
-%parse-param {void *_data}
-%parse-param {void *scanner}
-%lex-param {void* scanner}
+
+%parse-param {struct list_head *list_all}
+%parse-param {struct list_head *list_event}
+%parse-param {int *idx}
 
 %{
 

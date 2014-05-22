@@ -428,32 +428,6 @@ static u8 ds2482_w1_reset_bus(void *data)
 	return retval;
 }
 
-static u8 ds2482_w1_set_pullup(void *data, int delay)
-{
-	struct ds2482_w1_chan *pchan = data;
-	struct ds2482_data    *pdev = pchan->pdev;
-	u8 retval = 1;
-
-	/* if delay is non-zero activate the pullup,
-	 * the strong pullup will be automatically deactivated
-	 * by the master, so do not explicitly deactive it
-	 */
-	if (delay) {
-		/* both waits are crucial, otherwise devices might not be
-		 * powered long enough, causing e.g. a w1_therm sensor to
-		 * provide wrong conversion results
-		 */
-		ds2482_wait_1wire_idle(pdev);
-		/* note: it seems like both SPU and APU have to be set! */
-		retval = ds2482_send_cmd_data(pdev, DS2482_CMD_WRITE_CONFIG,
-			ds2482_calculate_config(DS2482_REG_CFG_SPU |
-						DS2482_REG_CFG_APU));
-		ds2482_wait_1wire_idle(pdev);
-	}
-
-	return retval;
-}
-
 static int ds2482_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);

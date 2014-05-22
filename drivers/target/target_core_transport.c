@@ -978,13 +978,57 @@ target_cmd_size_check(struct se_cmd *cmd, unsigned int size)
 {
 	struct se_device *dev = cmd->se_dev;
 
-	if (cmd->unknown_data_length) {
-		cmd->data_length = size;
-	} else if (size != cmd->data_length) {
-		pr_warn("TARGET_CORE[%s]: Expected Transfer Length:"
-			" %u does not match SCSI CDB Length: %u for SAM Opcode:"
-			" 0x%02x\n", cmd->se_tfo->get_fabric_name(),
-				cmd->data_length, size, cmd->t_task_cdb[0]);
+	transport_init_queue_obj(&dev->dev_queue_obj);
+	dev->dev_flags		= device_flags;
+	dev->dev_status		|= TRANSPORT_DEVICE_DEACTIVATED;
+	dev->dev_ptr		= transport_dev;
+	dev->se_hba		= hba;
+	dev->se_sub_dev		= se_dev;
+	dev->transport		= transport;
+	dev->dev_link_magic	= SE_DEV_LINK_MAGIC;
+	INIT_LIST_HEAD(&dev->dev_list);
+	INIT_LIST_HEAD(&dev->dev_sep_list);
+	INIT_LIST_HEAD(&dev->dev_tmr_list);
+	INIT_LIST_HEAD(&dev->execute_task_list);
+	INIT_LIST_HEAD(&dev->delayed_cmd_list);
+	INIT_LIST_HEAD(&dev->state_task_list);
+	INIT_LIST_HEAD(&dev->qf_cmd_list);
+	spin_lock_init(&dev->execute_task_lock);
+	spin_lock_init(&dev->delayed_cmd_lock);
+	spin_lock_init(&dev->dev_reservation_lock);
+	spin_lock_init(&dev->dev_status_lock);
+	spin_lock_init(&dev->se_port_lock);
+	spin_lock_init(&dev->se_tmr_lock);
+	spin_lock_init(&dev->qf_cmd_lock);
+	atomic_set(&dev->dev_ordered_id, 0);
+
+	se_dev_set_default_attribs(dev, dev_limits);
+
+	dev->dev_index = scsi_get_new_index(SCSI_DEVICE_INDEX);
+	dev->creation_time = get_jiffies_64();
+	spin_lock_init(&dev->stats_lock);
+
+	spin_lock(&hba->device_lock);
+	list_add_tail(&dev->dev_list, &hba->hba_dev_list);
+	hba->dev_count++;
+	spin_unlock(&hba->device_lock);
+	/*
+	 * Setup the SAM Task Attribute emulation for struct se_device
+	 */
+	core_setup_task_attr_emulation(dev);
+	/*
+	 * Force PR and ALUA passthrough emulation with internal object use.
+	 */
+	force_pt = (hba->hba_flags & HBA_FLAGS_INTERNAL_USE);
+	/*
+	 * Setup the Reservations infrastructure for struct se_device
+	 */
+	core_setup_reservations(dev, force_pt);
+	/*
+	 * Setup the Asymmetric Logical Unit Assignment for struct se_device
+	 */
+	if (core_setup_alua(dev, force_pt) < 0)
+		goto out;
 
 		if (cmd->data_direction == DMA_TO_DEVICE) {
 			pr_err("Rejecting underflow/overflow"
@@ -1710,11 +1754,101 @@ static void target_restart_delayed_cmds(struct se_device *dev)
 	for (;;) {
 		struct se_cmd *cmd;
 
-		spin_lock(&dev->delayed_cmd_lock);
-		if (list_empty(&dev->delayed_cmd_list)) {
-			spin_unlock(&dev->delayed_cmd_lock);
-			break;
+		cmd->t_task_lba = get_unaligned_be32(&cdb[2]);
+		cmd->se_cmd_flags |= SCF_SCSI_CONTROL_SG_IO_CDB;
+		/*
+		 * Follow sbcr26 with WRITE_SAME (10) and check for the existence
+		 * of byte 1 bit 3 UNMAP instead of original reserved field
+		 */
+		if (target_check_write_same_discard(&cdb[1], dev) < 0)
+			goto out_unsupported_cdb;
+		if (!passthrough)
+			cmd->execute_task = target_emulate_write_same;
+		break;
+	case ALLOW_MEDIUM_REMOVAL:
+	case ERASE:
+	case REZERO_UNIT:
+	case SEEK_10:
+	case SPACE:
+	case START_STOP:
+	case TEST_UNIT_READY:
+	case VERIFY:
+	case WRITE_FILEMARKS:
+		cmd->se_cmd_flags |= SCF_SCSI_NON_DATA_CDB;
+		if (!passthrough)
+			cmd->execute_task = target_emulate_noop;
+		break;
+	case GPCMD_CLOSE_TRACK:
+	case INITIALIZE_ELEMENT_STATUS:
+	case GPCMD_LOAD_UNLOAD:
+	case GPCMD_SET_SPEED:
+	case MOVE_MEDIUM:
+		cmd->se_cmd_flags |= SCF_SCSI_NON_DATA_CDB;
+		break;
+	case REPORT_LUNS:
+		cmd->execute_task = target_report_luns;
+		size = (cdb[6] << 24) | (cdb[7] << 16) | (cdb[8] << 8) | cdb[9];
+		/*
+		 * Do implict HEAD_OF_QUEUE processing for REPORT_LUNS
+		 * See spc4r17 section 5.3
+		 */
+		if (cmd->se_dev->dev_task_attr_type == SAM_TASK_ATTR_EMULATED)
+			cmd->sam_task_attr = MSG_HEAD_TAG;
+		cmd->se_cmd_flags |= SCF_SCSI_CONTROL_SG_IO_CDB;
+		break;
+	default:
+		pr_warn("TARGET_CORE[%s]: Unsupported SCSI Opcode"
+			" 0x%02x, sending CHECK_CONDITION.\n",
+			cmd->se_tfo->get_fabric_name(), cdb[0]);
+		goto out_unsupported_cdb;
+	}
+
+	if (size != cmd->data_length) {
+		pr_warn("TARGET_CORE[%s]: Expected Transfer Length:"
+			" %u does not match SCSI CDB Length: %u for SAM Opcode:"
+			" 0x%02x\n", cmd->se_tfo->get_fabric_name(),
+				cmd->data_length, size, cdb[0]);
+
+		cmd->cmd_spdtl = size;
+
+		if (cmd->data_direction == DMA_TO_DEVICE) {
+			pr_err("Rejecting underflow/overflow"
+					" WRITE data\n");
+			goto out_invalid_cdb_field;
 		}
+		/*
+		 * Reject READ_* or WRITE_* with overflow/underflow for
+		 * type SCF_SCSI_DATA_SG_IO_CDB.
+		 */
+		if (!ret && (dev->se_sub_dev->se_dev_attrib.block_size != 512))  {
+			pr_err("Failing OVERFLOW/UNDERFLOW for LBA op"
+				" CDB on non 512-byte sector setup subsystem"
+				" plugin: %s\n", dev->transport->name);
+			/* Returns CHECK_CONDITION + INVALID_CDB_FIELD */
+			goto out_invalid_cdb_field;
+		}
+		/*
+		 * For the overflow case keep the existing fabric provided
+		 * ->data_length.  Otherwise for the underflow case, reset
+		 * ->data_length to the smaller SCSI expected data transfer
+		 * length.
+		 */
+		if (size > cmd->data_length) {
+			cmd->se_cmd_flags |= SCF_OVERFLOW_BIT;
+			cmd->residual_count = (size - cmd->data_length);
+		} else {
+			cmd->se_cmd_flags |= SCF_UNDERFLOW_BIT;
+			cmd->residual_count = (cmd->data_length - size);
+			cmd->data_length = size;
+		}
+	}
+
+	if (cmd->se_cmd_flags & SCF_SCSI_DATA_SG_IO_CDB &&
+	    sectors > dev->se_sub_dev->se_dev_attrib.fabric_max_sectors) {
+		printk_ratelimited(KERN_ERR "SCSI OP %02xh with too big sectors %u\n",
+				   cdb[0], sectors);
+		goto out_invalid_cdb_field;
+	}
 
 		cmd = list_entry(dev->delayed_cmd_list.next,
 				 struct se_cmd, se_delayed_node);
@@ -2003,6 +2137,259 @@ void *transport_kmap_data_sg(struct se_cmd *cmd)
 	 */
 	if (!cmd->t_data_nents)
 		return NULL;
+	else if (cmd->t_data_nents == 1)
+		return kmap(sg_page(sg)) + sg->offset;
+
+	/* >1 page. use vmap */
+	pages = kmalloc(sizeof(*pages) * cmd->t_data_nents, GFP_KERNEL);
+	if (!pages)
+		return NULL;
+
+	/* convert sg[] to pages[] */
+	for_each_sg(cmd->t_data_sg, sg, cmd->t_data_nents, i) {
+		pages[i] = sg_page(sg);
+	}
+
+	cmd->t_data_vmap = vmap(pages, cmd->t_data_nents,  VM_MAP, PAGE_KERNEL);
+	kfree(pages);
+	if (!cmd->t_data_vmap)
+		return NULL;
+
+	return cmd->t_data_vmap + cmd->t_data_sg[0].offset;
+}
+EXPORT_SYMBOL(transport_kmap_data_sg);
+
+void transport_kunmap_data_sg(struct se_cmd *cmd)
+{
+	if (!cmd->t_data_nents) {
+		return;
+	} else if (cmd->t_data_nents == 1) {
+		kunmap(sg_page(cmd->t_data_sg));
+		return;
+	}
+
+	vunmap(cmd->t_data_vmap);
+	cmd->t_data_vmap = NULL;
+}
+EXPORT_SYMBOL(transport_kunmap_data_sg);
+
+static int
+transport_generic_get_mem(struct se_cmd *cmd)
+{
+	u32 length = cmd->data_length;
+	unsigned int nents;
+	struct page *page;
+	gfp_t zero_flag;
+	int i = 0;
+
+	nents = DIV_ROUND_UP(length, PAGE_SIZE);
+	cmd->t_data_sg = kmalloc(sizeof(struct scatterlist) * nents, GFP_KERNEL);
+	if (!cmd->t_data_sg)
+		return -ENOMEM;
+
+	cmd->t_data_nents = nents;
+	sg_init_table(cmd->t_data_sg, nents);
+
+	zero_flag = cmd->se_cmd_flags & SCF_SCSI_DATA_SG_IO_CDB ? 0 : __GFP_ZERO;
+
+	while (length) {
+		u32 page_len = min_t(u32, length, PAGE_SIZE);
+		page = alloc_page(GFP_KERNEL | zero_flag);
+		if (!page)
+			goto out;
+
+		sg_set_page(&cmd->t_data_sg[i], page, page_len, 0);
+		length -= page_len;
+		i++;
+	}
+	return 0;
+
+out:
+	while (i > 0) {
+		i--;
+		__free_page(sg_page(&cmd->t_data_sg[i]));
+	}
+	kfree(cmd->t_data_sg);
+	cmd->t_data_sg = NULL;
+	return -ENOMEM;
+}
+
+/* Reduce sectors if they are too long for the device */
+static inline sector_t transport_limit_task_sectors(
+	struct se_device *dev,
+	unsigned long long lba,
+	sector_t sectors)
+{
+	sectors = min_t(sector_t, sectors, dev->se_sub_dev->se_dev_attrib.max_sectors);
+
+	if (dev->transport->get_device_type(dev) == TYPE_DISK)
+		if ((lba + sectors) > transport_dev_end_lba(dev))
+			sectors = ((transport_dev_end_lba(dev) - lba) + 1);
+
+	return sectors;
+}
+
+
+/*
+ * This function can be used by HW target mode drivers to create a linked
+ * scatterlist from all contiguously allocated struct se_task->task_sg[].
+ * This is intended to be called during the completion path by TCM Core
+ * when struct target_core_fabric_ops->check_task_sg_chaining is enabled.
+ */
+void transport_do_task_sg_chain(struct se_cmd *cmd)
+{
+	struct scatterlist *sg_first = NULL;
+	struct scatterlist *sg_prev = NULL;
+	int sg_prev_nents = 0;
+	struct scatterlist *sg;
+	struct se_task *task;
+	u32 chained_nents = 0;
+	int i;
+
+	BUG_ON(!cmd->se_tfo->task_sg_chaining);
+
+	/*
+	 * Walk the struct se_task list and setup scatterlist chains
+	 * for each contiguously allocated struct se_task->task_sg[].
+	 */
+	list_for_each_entry(task, &cmd->t_task_list, t_list) {
+		if (!task->task_sg)
+			continue;
+
+		if (!sg_first) {
+			sg_first = task->task_sg;
+			chained_nents = task->task_sg_nents;
+		} else {
+			sg_chain(sg_prev, sg_prev_nents, task->task_sg);
+			chained_nents += task->task_sg_nents;
+		}
+		/*
+		 * For the padded tasks, use the extra SGL vector allocated
+		 * in transport_allocate_data_tasks() for the sg_prev_nents
+		 * offset into sg_chain() above.
+		 *
+		 * We do not need the padding for the last task (or a single
+		 * task), but in that case we will never use the sg_prev_nents
+		 * value below which would be incorrect.
+		 */
+		sg_prev_nents = (task->task_sg_nents + 1);
+		sg_prev = task->task_sg;
+	}
+	/*
+	 * Setup the starting pointer and total t_tasks_sg_linked_no including
+	 * padding SGs for linking and to mark the end.
+	 */
+	cmd->t_tasks_sg_chained = sg_first;
+	cmd->t_tasks_sg_chained_no = chained_nents;
+
+	pr_debug("Setup cmd: %p cmd->t_tasks_sg_chained: %p and"
+		" t_tasks_sg_chained_no: %u\n", cmd, cmd->t_tasks_sg_chained,
+		cmd->t_tasks_sg_chained_no);
+
+	for_each_sg(cmd->t_tasks_sg_chained, sg,
+			cmd->t_tasks_sg_chained_no, i) {
+
+		pr_debug("SG[%d]: %p page: %p length: %d offset: %d\n",
+			i, sg, sg_page(sg), sg->length, sg->offset);
+		if (sg_is_chain(sg))
+			pr_debug("SG: %p sg_is_chain=1\n", sg);
+		if (sg_is_last(sg))
+			pr_debug("SG: %p sg_is_last=1\n", sg);
+	}
+}
+EXPORT_SYMBOL(transport_do_task_sg_chain);
+
+/*
+ * Break up cmd into chunks transport can handle
+ */
+static int
+transport_allocate_data_tasks(struct se_cmd *cmd,
+	enum dma_data_direction data_direction,
+	struct scatterlist *cmd_sg, unsigned int sgl_nents)
+{
+	struct se_device *dev = cmd->se_dev;
+	int task_count, i;
+	unsigned long long lba;
+	sector_t sectors, dev_max_sectors;
+	u32 sector_size;
+
+	if (transport_cmd_get_valid_sectors(cmd) < 0)
+		return -EINVAL;
+
+	dev_max_sectors = dev->se_sub_dev->se_dev_attrib.max_sectors;
+	sector_size = dev->se_sub_dev->se_dev_attrib.block_size;
+
+	WARN_ON(cmd->data_length % sector_size);
+
+	lba = cmd->t_task_lba;
+	sectors = DIV_ROUND_UP(cmd->data_length, sector_size);
+	task_count = DIV_ROUND_UP_SECTOR_T(sectors, dev_max_sectors);
+
+	/*
+	 * If we need just a single task reuse the SG list in the command
+	 * and avoid a lot of work.
+	 */
+	if (task_count == 1) {
+		struct se_task *task;
+		unsigned long flags;
+
+		task = transport_generic_get_task(cmd, data_direction);
+		if (!task)
+			return -ENOMEM;
+
+		task->task_sg = cmd_sg;
+		task->task_sg_nents = sgl_nents;
+
+		task->task_lba = lba;
+		task->task_sectors = sectors;
+		task->task_size = task->task_sectors * sector_size;
+
+		spin_lock_irqsave(&cmd->t_state_lock, flags);
+		list_add_tail(&task->t_list, &cmd->t_task_list);
+		spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+
+		return task_count;
+	}
+
+	for (i = 0; i < task_count; i++) {
+		struct se_task *task;
+		unsigned int task_size, task_sg_nents_padded;
+		struct scatterlist *sg;
+		unsigned long flags;
+		int count;
+
+		task = transport_generic_get_task(cmd, data_direction);
+		if (!task)
+			return -ENOMEM;
+
+		task->task_lba = lba;
+		task->task_sectors = min(sectors, dev_max_sectors);
+		task->task_size = task->task_sectors * sector_size;
+
+		/*
+		 * This now assumes that passed sg_ents are in PAGE_SIZE chunks
+		 * in order to calculate the number per task SGL entries
+		 */
+		task->task_sg_nents = DIV_ROUND_UP(task->task_size, PAGE_SIZE);
+		/*
+		 * Check if the fabric module driver is requesting that all
+		 * struct se_task->task_sg[] be chained together..  If so,
+		 * then allocate an extra padding SG entry for linking and
+		 * marking the end of the chained SGL for every task except
+		 * the last one for (task_count > 1) operation, or skipping
+		 * the extra padding for the (task_count == 1) case.
+		 */
+		if (cmd->se_tfo->task_sg_chaining && (i < (task_count - 1))) {
+			task_sg_nents_padded = (task->task_sg_nents + 1);
+		} else
+			task_sg_nents_padded = task->task_sg_nents;
+
+		task->task_sg = kmalloc(sizeof(struct scatterlist) *
+					task_sg_nents_padded, GFP_KERNEL);
+		if (!task->task_sg) {
+			cmd->se_dev->transport->free_task(task);
+			return -ENOMEM;
+		}
 
 	BUG_ON(!sg);
 	if (cmd->t_data_nents == 1)
@@ -2730,6 +3117,15 @@ transport_send_check_condition_and_sense(struct se_cmd *cmd,
 		buffer[SPC_SENSE_KEY_OFFSET] = ILLEGAL_REQUEST;
 		/* LOGICAL BLOCK ADDRESS OUT OF RANGE */
 		buffer[SPC_ASC_KEY_OFFSET] = 0x21;
+		break;
+	case TCM_ADDRESS_OUT_OF_RANGE:
+		/* CURRENT ERROR */
+		buffer[offset] = 0x70;
+		buffer[offset+SPC_ADD_SENSE_LEN_OFFSET] = 10;
+		/* ILLEGAL REQUEST */
+		buffer[offset+SPC_SENSE_KEY_OFFSET] = ILLEGAL_REQUEST;
+		/* LOGICAL BLOCK ADDRESS OUT OF RANGE */
+		buffer[offset+SPC_ASC_KEY_OFFSET] = 0x21;
 		break;
 	case TCM_CHECK_CONDITION_UNIT_ATTENTION:
 		/* CURRENT ERROR */

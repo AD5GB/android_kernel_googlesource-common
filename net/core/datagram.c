@@ -191,9 +191,8 @@ struct sk_buff *__skb_recv_datagram(struct sock *sk, unsigned int flags,
 			last = skb;
 			*peeked = skb->peeked;
 			if (flags & MSG_PEEK) {
-				if (_off >= skb->len && (skb->len || _off ||
-							 skb->peeked)) {
-					_off -= skb->len;
+				if (*off >= skb->len && skb->len) {
+					*off -= skb->len;
 					continue;
 				}
 				skb->peeked = 1;

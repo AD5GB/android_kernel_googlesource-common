@@ -1165,6 +1165,7 @@ static void clk_change_rate(struct clk *clk)
 	struct clk *child;
 	unsigned long old_rate;
 	unsigned long best_parent_rate = 0;
+	struct hlist_node *tmp;
 
 	old_rate = clk->rate;
 
@@ -1350,6 +1351,8 @@ static u8 clk_fetch_parent_index(struct clk *clk, struct clk *parent)
 {
 	u8 i;
 
+	old_parent = clk->parent;
+
 	if (!clk->parents)
 		clk->parents = kzalloc((sizeof(struct clk*) * clk->num_parents),
 								GFP_KERNEL);
@@ -1367,6 +1370,12 @@ static u8 clk_fetch_parent_index(struct clk *clk, struct clk *parent)
 				clk->parents[i] = __clk_lookup(parent->name);
 			break;
 		}
+	}
+
+	if (i == clk->num_parents) {
+		pr_debug("%s: clock %s is not a possible parent of clock %s\n",
+				__func__, parent->name, clk->name);
+		goto out;
 	}
 
 	return i;

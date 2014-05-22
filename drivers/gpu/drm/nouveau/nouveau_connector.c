@@ -685,7 +685,7 @@ nouveau_connector_detect_depth(struct drm_connector *connector)
 	}
 
 	/* we're out of options unless we're LVDS, default to 8bpc */
-	if (nv_encoder->dcb->type != DCB_OUTPUT_LVDS) {
+	if (nv_encoder->dcb->type != OUTPUT_LVDS) {
 		connector->display_info.bpc = 8;
 		return;
 	}

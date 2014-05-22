@@ -139,7 +139,7 @@ typedef struct tagSWPAResult {
 	u8 proto;
 	u8 key_mgmt;
 	u8 eap_type;
-         bool authenticated;
+         BOOL authenticated;
 } __packed SWPAResult, *PSWPAResult;
 
 typedef struct tagSCmdStartAP {
@@ -177,11 +177,13 @@ typedef struct tagSBSSIDItem {
 
 } __packed SBSSIDItem;
 
+
 typedef struct tagSBSSIDList {
 
 	u32		    uItem;
 	SBSSIDItem	sBSSIDList[0];
 } __packed SBSSIDList, *PSBSSIDList;
+
 
 typedef struct tagSNodeItem {
     // STA info
@@ -203,12 +205,14 @@ typedef struct tagSNodeItem {
 
 } __packed SNodeItem;
 
+
 typedef struct tagSNodeList {
 
 	u32		    uItem;
 	SNodeItem	sNodeList[0];
 
 } __packed SNodeList, *PSNodeList;
+
 
 typedef struct tagSCmdLinkStatus {
 
@@ -239,6 +243,8 @@ typedef struct tagSDot11MIBCount {
     u32 MulticastReceivedFrameCount;
     u32 FCSErrorCount;
 } __packed SDot11MIBCount, *PSDot11MIBCount;
+
+
 
 //
 // statistic counter
@@ -421,5 +427,13 @@ struct viawget_hostapd_param {
 		} scan_req;
 	} u;
 } __packed;
+
+/*---------------------  Export Classes  ----------------------------*/
+
+/*---------------------  Export Variables  --------------------------*/
+
+/*---------------------  Export Types  ------------------------------*/
+
+/*---------------------  Export Functions  --------------------------*/
 
 #endif /* __IOCMD_H__ */

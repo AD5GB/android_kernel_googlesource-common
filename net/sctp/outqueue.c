@@ -291,6 +291,10 @@ void sctp_outq_free(struct sctp_outq *q)
 {
 	/* Throw away leftover chunks. */
 	__sctp_outq_teardown(q);
+
+	/* If we were kmalloc()'d, free the memory.  */
+	if (q->malloced)
+		kfree(q);
 }
 
 /* Put a new chunk in an sctp_outq.  */

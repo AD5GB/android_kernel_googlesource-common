@@ -3079,8 +3079,6 @@ static int ext3_do_update_inode(handle_t *handle,
 	int err = 0, rc, block;
 	int need_datasync = 0;
 	__le32 disksize;
-	uid_t i_uid;
-	gid_t i_gid;
 
 again:
 	/* we can't allow multiple procs in here at once, its a bit racey */

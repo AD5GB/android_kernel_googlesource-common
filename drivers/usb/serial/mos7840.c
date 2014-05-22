@@ -185,7 +185,7 @@
 
 static int device_type;
 
-static const struct usb_device_id id_table[] = {
+static const struct usb_device_id moschip_id_table_combined[] = {
 	{USB_DEVICE(USB_VENDOR_ID_MOSCHIP, MOSCHIP_DEVICE_ID_7840)},
 	{USB_DEVICE(USB_VENDOR_ID_MOSCHIP, MOSCHIP_DEVICE_ID_7820)},
 	{USB_DEVICE(USB_VENDOR_ID_MOSCHIP, MOSCHIP_DEVICE_ID_7810)},
@@ -469,7 +469,8 @@ static void mos7840_control_callback(struct urb *urb)
 		dev_dbg(dev, "%s - urb shutting down with status: %d\n", __func__, status);
 		return;
 	default:
-		dev_dbg(dev, "%s - nonzero urb status received: %d\n", __func__, status);
+		dbg("%s - nonzero urb status received: %d", __func__,
+		    status);
 		return;
 	}
 
@@ -2401,13 +2402,30 @@ static int mos7840_port_probe(struct usb_serial_port *port)
 			!mos7840_port->dr) {
 		status = -ENOMEM;
 		goto error;
+	} else
+		dbg("ZLP_REG5 Writing success status%d", status);
+
+	/* setting configuration feature to one */
+	usb_control_msg(serial->dev, usb_sndctrlpipe(serial->dev, 0),
+			(__u8) 0x03, 0x00, 0x01, 0x00, NULL, 0x00, 5 * HZ);
+	return 0;
+error:
+	for (/* nothing */; i >= 0; i--) {
+		mos7840_port = mos7840_get_port_private(serial->port[i]);
+
+		kfree(mos7840_port->dr);
+		kfree(mos7840_port->ctrl_buf);
+		usb_free_urb(mos7840_port->control_urb);
+		kfree(mos7840_port);
 	}
 
 	mos7840_port->has_led = false;
 
-	/* Initialize LED timers */
-	if (device_type == MOSCHIP_DEVICE_ID_7810) {
-		mos7840_port->has_led = true;
+static void mos7840_disconnect(struct usb_serial *serial)
+{
+	int i;
+	struct moschip_port *mos7840_port;
+	dbg("%s", " disconnect :entering..........");
 
 		init_timer(&mos7840_port->led_timer1);
 		mos7840_port->led_timer1.function = mos7840_led_off;
@@ -2423,8 +2441,12 @@ static int mos7840_port_probe(struct usb_serial_port *port)
 
 		mos7840_port->led_flag = false;
 
-		/* Turn off LED */
-		mos7840_set_led_sync(port, MODEM_CONTROL_REGISTER, 0x0300);
+	for (i = 0; i < serial->num_ports; ++i) {
+		mos7840_port = mos7840_get_port_private(serial->port[i]);
+		dbg ("mos7840_port %d = %p", i, mos7840_port);
+		if (mos7840_port) {
+			usb_kill_urb(mos7840_port->control_urb);
+		}
 	}
 out:
 	if (pnum == serial->num_ports - 1) {
@@ -2462,8 +2484,15 @@ static int mos7840_port_remove(struct usb_serial_port *port)
 		/* Turn off LED */
 		mos7840_set_led_sync(port, MODEM_CONTROL_REGISTER, 0x0300);
 
-		del_timer_sync(&mos7840_port->led_timer1);
-		del_timer_sync(&mos7840_port->led_timer2);
+	for (i = 0; i < serial->num_ports; ++i) {
+		mos7840_port = mos7840_get_port_private(serial->port[i]);
+		dbg("mos7840_port %d = %p", i, mos7840_port);
+		if (mos7840_port) {
+			usb_free_urb(mos7840_port->control_urb);
+			kfree(mos7840_port->ctrl_buf);
+			kfree(mos7840_port->dr);
+			kfree(mos7840_port);
+		}
 	}
 	usb_kill_urb(mos7840_port->control_urb);
 	usb_free_urb(mos7840_port->control_urb);

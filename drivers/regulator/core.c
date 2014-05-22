@@ -3698,8 +3698,7 @@ unset_supplies:
 
 scrub:
 	if (rdev->supply)
-		_regulator_put(rdev->supply);
-	regulator_ena_gpio_free(rdev);
+		regulator_put(rdev->supply);
 	kfree(rdev->constraints);
 wash:
 	device_unregister(&rdev->dev);

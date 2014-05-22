@@ -822,7 +822,6 @@ int cfg80211_change_iface(struct cfg80211_registered_device *rdev,
 		return -EBUSY;
 
 	if (ntype != otype && netif_running(dev)) {
-		mutex_lock(&rdev->devlist_mtx);
 		err = cfg80211_can_change_interface(rdev, dev->ieee80211_ptr,
 						    ntype);
 		mutex_unlock(&rdev->devlist_mtx);
@@ -1331,6 +1330,9 @@ int cfg80211_can_use_iftype_chan(struct cfg80211_registered_device *rdev,
 	if (total == 1 && !radar_detect)
 		return 0;
 
+	if (total == 1)
+		return 0;
+
 	for (i = 0; i < rdev->wiphy.n_iface_combinations; i++) {
 		const struct ieee80211_iface_combination *c;
 		struct ieee80211_iface_limit *limits;
@@ -1360,9 +1362,6 @@ int cfg80211_can_use_iftype_chan(struct cfg80211_registered_device *rdev,
 				limits[j].max -= num[iftype];
 			}
 		}
-
-		if (radar_detect && !(c->radar_detect_widths & radar_detect))
-			goto cont;
 
 		/*
 		 * Finally check that all iftypes that we're currently

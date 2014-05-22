@@ -62,6 +62,8 @@ enum {
 	VIAWGET_DEVICECLOSE_MSG = 6
 };
 
+
+
 typedef struct viawget_wpa_header {
 	u8 type;
 	u16 req_ie_len;
@@ -124,5 +126,13 @@ struct viawget_scan_result {
 	int level;
 	int maxrate;
 } __packed;
+
+/*---------------------  Export Classes  ----------------------------*/
+
+/*---------------------  Export Variables  --------------------------*/
+
+/*---------------------  Export Types  ------------------------------*/
+
+/*---------------------  Export Functions  --------------------------*/
 
 #endif /* __IOWPA_H__ */

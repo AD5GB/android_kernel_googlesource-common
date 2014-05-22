@@ -47,13 +47,27 @@
 #define MASK_BLKPTR_LO    0xFF000000
 #define MCG_XBLK_ADDR     0xC0000400
 
-static const char * const th_names[] = {
-	"load_store",
-	"insn_fetch",
-	"combined_unit",
-	"",
-	"northbridge",
-	"execution_unit",
+struct threshold_block {
+	unsigned int		block;
+	unsigned int		bank;
+	unsigned int		cpu;
+	u32			address;
+	u16			interrupt_enable;
+	bool			interrupt_capable;
+	u16			threshold_limit;
+	struct kobject		kobj;
+	struct list_head	miscj;
+};
+
+struct threshold_bank {
+	struct kobject		*kobj;
+	struct threshold_block	*blocks;
+	cpumask_var_t		cpus;
+};
+static DEFINE_PER_CPU(struct threshold_bank * [NR_BANKS], threshold_banks);
+
+static unsigned char shared_bank[NR_BANKS] = {
+	0, 0, 0, 0, 1
 };
 
 static DEFINE_PER_CPU(struct threshold_bank **, threshold_banks);
@@ -72,32 +86,6 @@ struct thresh_restart {
 	int			lvt_off;
 	u16			old_limit;
 };
-
-static inline bool is_shared_bank(int bank)
-{
-	/* Bank 4 is for northbridge reporting and is thus shared */
-	return (bank == 4);
-}
-
-static const char * const bank4_names(struct threshold_block *b)
-{
-	switch (b->address) {
-	/* MSR4_MISC0 */
-	case 0x00000413:
-		return "dram";
-
-	case 0xc0000408:
-		return "ht_links";
-
-	case 0xc0000409:
-		return "l3_cache";
-
-	default:
-		WARN(1, "Funny MSR: 0x%08x\n", b->address);
-		return "";
-	}
-};
-
 
 static bool lvt_interrupt_supported(unsigned int bank, u32 msr_high_bits)
 {
@@ -239,6 +227,8 @@ void mce_amd_feature_init(struct cpuinfo_x86 *c)
 
 			if (!block)
 				per_cpu(bank_map, cpu) |= (1 << bank);
+			if (shared_bank[bank] && c->cpu_core_id)
+				break;
 
 			memset(&b, 0, sizeof(b));
 			b.cpu			= cpu;

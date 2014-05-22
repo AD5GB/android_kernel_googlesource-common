@@ -181,6 +181,95 @@ int r600_audio_init(struct radeon_device *rdev)
 }
 
 /*
+ * enable the polling timer, to check for status changes
+ */
+void r600_audio_enable_polling(struct drm_encoder *encoder)
+{
+	struct drm_device *dev = encoder->dev;
+	struct radeon_device *rdev = dev->dev_private;
+	struct radeon_encoder *radeon_encoder = to_radeon_encoder(encoder);
+
+	DRM_DEBUG("r600_audio_enable_polling: %d\n",
+		radeon_encoder->audio_polling_active);
+	if (radeon_encoder->audio_polling_active)
+		return;
+
+	radeon_encoder->audio_polling_active = 1;
+	if (rdev->audio_enabled)
+		mod_timer(&rdev->audio_timer, jiffies + 1);
+}
+
+/*
+ * disable the polling timer, so we get no more status updates
+ */
+void r600_audio_disable_polling(struct drm_encoder *encoder)
+{
+	struct radeon_encoder *radeon_encoder = to_radeon_encoder(encoder);
+	DRM_DEBUG("r600_audio_disable_polling: %d\n",
+		radeon_encoder->audio_polling_active);
+	radeon_encoder->audio_polling_active = 0;
+}
+
+/*
+ * atach the audio codec to the clock source of the encoder
+ */
+void r600_audio_set_clock(struct drm_encoder *encoder, int clock)
+{
+	struct drm_device *dev = encoder->dev;
+	struct radeon_device *rdev = dev->dev_private;
+	struct radeon_encoder *radeon_encoder = to_radeon_encoder(encoder);
+	struct radeon_encoder_atom_dig *dig = radeon_encoder->enc_priv;
+	struct radeon_crtc *radeon_crtc = to_radeon_crtc(encoder->crtc);
+	int base_rate = 48000;
+
+	switch (radeon_encoder->encoder_id) {
+	case ENCODER_OBJECT_ID_INTERNAL_KLDSCP_TMDS1:
+	case ENCODER_OBJECT_ID_INTERNAL_LVTM1:
+		WREG32_P(R600_AUDIO_TIMING, 0, ~0x301);
+		break;
+	case ENCODER_OBJECT_ID_INTERNAL_UNIPHY:
+	case ENCODER_OBJECT_ID_INTERNAL_UNIPHY1:
+	case ENCODER_OBJECT_ID_INTERNAL_UNIPHY2:
+	case ENCODER_OBJECT_ID_INTERNAL_KLDSCP_LVTMA:
+		WREG32_P(R600_AUDIO_TIMING, 0x100, ~0x301);
+		break;
+	default:
+		dev_err(rdev->dev, "Unsupported encoder type 0x%02X\n",
+			  radeon_encoder->encoder_id);
+		return;
+	}
+
+	if (ASIC_IS_DCE4(rdev)) {
+		/* TODO: other PLLs? */
+		WREG32(EVERGREEN_AUDIO_PLL1_MUL, base_rate * 10);
+		WREG32(EVERGREEN_AUDIO_PLL1_DIV, clock * 10);
+		WREG32(EVERGREEN_AUDIO_PLL1_UNK, 0x00000071);
+
+		/* Select DTO source */
+		WREG32(0x5ac, radeon_crtc->crtc_id);
+	} else {
+		switch (dig->dig_encoder) {
+		case 0:
+			WREG32(R600_AUDIO_PLL1_MUL, base_rate * 50);
+			WREG32(R600_AUDIO_PLL1_DIV, clock * 100);
+			WREG32(R600_AUDIO_CLK_SRCSEL, 0);
+			break;
+
+		case 1:
+			WREG32(R600_AUDIO_PLL2_MUL, base_rate * 50);
+			WREG32(R600_AUDIO_PLL2_DIV, clock * 100);
+			WREG32(R600_AUDIO_CLK_SRCSEL, 1);
+			break;
+		default:
+			dev_err(rdev->dev,
+				"Unsupported DIG on encoder 0x%02X\n",
+				radeon_encoder->encoder_id);
+			return;
+		}
+	}
+}
+
+/*
  * release the audio timer
  * TODO: How to do this correctly on SMP systems?
  */

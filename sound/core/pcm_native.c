@@ -1663,8 +1663,9 @@ static int snd_pcm_link(struct snd_pcm_substream *substream, int fd)
 	up_write(&snd_pcm_link_rwsem);
  _nolock:
 	snd_card_unref(substream1->pcm->card);
-	fput_light(file, fput_needed);
-	kfree(group);
+	fput(file);
+	if (res < 0)
+		kfree(group);
 	return res;
 }
 

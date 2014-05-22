@@ -393,12 +393,24 @@ static void gfs2_check_magic(struct buffer_head *bh)
 	void *kaddr;
 	__be32 *ptr;
 
-	clear_buffer_escaped(bh);
-	kaddr = kmap_atomic(bh->b_page);
-	ptr = kaddr + bh_offset(bh);
-	if (*ptr == cpu_to_be32(GFS2_MAGIC))
-		set_buffer_escaped(bh);
-	kunmap_atomic(kaddr);
+	if (!list_empty(&bd->bd_list_tr))
+		return;
+	tr = current->journal_info;
+	tr->tr_touched = 1;
+	tr->tr_num_buf++;
+	list_add(&bd->bd_list_tr, &tr->tr_list_buf);
+	if (!list_empty(&le->le_list))
+		return;
+	set_bit(GLF_LFLUSH, &bd->bd_gl->gl_flags);
+	set_bit(GLF_DIRTY, &bd->bd_gl->gl_flags);
+	gfs2_meta_check(sdp, bd->bd_bh);
+	gfs2_pin(sdp, bd->bd_bh);
+	mh = (struct gfs2_meta_header *)bd->bd_bh->b_data;
+	mh->__pad0 = cpu_to_be64(0);
+	mh->mh_jid = cpu_to_be32(sdp->sd_jdesc->jd_jid);
+	sdp->sd_log_num_buf++;
+	list_add(&le->le_list, &sdp->sd_log_le_buf);
+	tr->tr_num_buf_new++;
 }
 
 static void gfs2_before_commit(struct gfs2_sbd *sdp, unsigned int limit,
@@ -713,6 +725,119 @@ static void revoke_lo_after_scan(struct gfs2_jdesc *jd, int error, int pass)
 	        jd->jd_jid, sdp->sd_found_revokes);
 
 	gfs2_revoke_clean(sdp);
+}
+
+/**
+ * databuf_lo_add - Add a databuf to the transaction.
+ *
+ * This is used in two distinct cases:
+ * i) In ordered write mode
+ *    We put the data buffer on a list so that we can ensure that its
+ *    synced to disk at the right time
+ * ii) In journaled data mode
+ *    We need to journal the data block in the same way as metadata in
+ *    the functions above. The difference is that here we have a tag
+ *    which is two __be64's being the block number (as per meta data)
+ *    and a flag which says whether the data block needs escaping or
+ *    not. This means we need a new log entry for each 251 or so data
+ *    blocks, which isn't an enormous overhead but twice as much as
+ *    for normal metadata blocks.
+ */
+static void databuf_lo_add(struct gfs2_sbd *sdp, struct gfs2_log_element *le)
+{
+	struct gfs2_bufdata *bd = container_of(le, struct gfs2_bufdata, bd_le);
+	struct gfs2_trans *tr = current->journal_info;
+	struct address_space *mapping = bd->bd_bh->b_page->mapping;
+	struct gfs2_inode *ip = GFS2_I(mapping->host);
+
+	if (tr) {
+		if (!list_empty(&bd->bd_list_tr))
+			return;
+		tr->tr_touched = 1;
+		if (gfs2_is_jdata(ip)) {
+			tr->tr_num_buf++;
+			list_add(&bd->bd_list_tr, &tr->tr_list_buf);
+		}
+	}
+	if (!list_empty(&le->le_list))
+		return;
+
+	set_bit(GLF_LFLUSH, &bd->bd_gl->gl_flags);
+	set_bit(GLF_DIRTY, &bd->bd_gl->gl_flags);
+	if (gfs2_is_jdata(ip)) {
+		gfs2_pin(sdp, bd->bd_bh);
+		tr->tr_num_databuf_new++;
+		sdp->sd_log_num_databuf++;
+		list_add_tail(&le->le_list, &sdp->sd_log_le_databuf);
+	} else {
+		list_add_tail(&le->le_list, &sdp->sd_log_le_ordered);
+	}
+}
+
+static void gfs2_check_magic(struct buffer_head *bh)
+{
+	void *kaddr;
+	__be32 *ptr;
+
+	clear_buffer_escaped(bh);
+	kaddr = kmap_atomic(bh->b_page);
+	ptr = kaddr + bh_offset(bh);
+	if (*ptr == cpu_to_be32(GFS2_MAGIC))
+		set_buffer_escaped(bh);
+	kunmap_atomic(kaddr);
+}
+
+static void gfs2_write_blocks(struct gfs2_sbd *sdp, struct buffer_head *bh,
+			      struct list_head *list, struct list_head *done,
+			      unsigned int n)
+{
+	struct buffer_head *bh1;
+	struct gfs2_log_descriptor *ld;
+	struct gfs2_bufdata *bd;
+	__be64 *ptr;
+
+	if (!bh)
+		return;
+
+	ld = bh_log_desc(bh);
+	ld->ld_length = cpu_to_be32(n + 1);
+	ld->ld_data1 = cpu_to_be32(n);
+
+	ptr = bh_log_ptr(bh);
+	
+	get_bh(bh);
+	submit_bh(WRITE_SYNC, bh);
+	gfs2_log_lock(sdp);
+	while(!list_empty(list)) {
+		bd = list_entry(list->next, struct gfs2_bufdata, bd_le.le_list);
+		list_move_tail(&bd->bd_le.le_list, done);
+		get_bh(bd->bd_bh);
+		while (be64_to_cpu(*ptr) != bd->bd_bh->b_blocknr) {
+			gfs2_log_incr_head(sdp);
+			ptr += 2;
+		}
+		gfs2_log_unlock(sdp);
+		lock_buffer(bd->bd_bh);
+		if (buffer_escaped(bd->bd_bh)) {
+			void *kaddr;
+			bh1 = gfs2_log_get_buf(sdp);
+			kaddr = kmap_atomic(bd->bd_bh->b_page);
+			memcpy(bh1->b_data, kaddr + bh_offset(bd->bd_bh),
+			       bh1->b_size);
+			kunmap_atomic(kaddr);
+			*(__be32 *)bh1->b_data = 0;
+			clear_buffer_escaped(bd->bd_bh);
+			unlock_buffer(bd->bd_bh);
+			brelse(bd->bd_bh);
+		} else {
+			bh1 = gfs2_log_fake_buf(sdp, bd->bd_bh);
+		}
+		submit_bh(WRITE_SYNC, bh1);
+		gfs2_log_lock(sdp);
+		ptr += 2;
+	}
+	gfs2_log_unlock(sdp);
+	brelse(bh);
 }
 
 /**

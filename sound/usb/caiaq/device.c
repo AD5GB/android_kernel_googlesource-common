@@ -490,7 +490,7 @@ static int snd_probe(struct usb_interface *intf,
 {
 	int ret;
 	struct snd_card *card = NULL;
-	struct usb_device *usb_dev = interface_to_usbdev(intf);
+	struct usb_device *device = interface_to_usbdev(intf);
 
 	ret = create_card(usb_dev, intf, &card);
 

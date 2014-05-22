@@ -458,7 +458,7 @@ nouveau_fbcon_init(struct drm_device *dev)
 	drm->fbcon = fbcon;
 	fbcon->helper.funcs = &nouveau_fbcon_helper_funcs;
 
-	ret = drm_fb_helper_init(dev, &fbcon->helper,
+	ret = drm_fb_helper_init(dev, &nfbdev->helper,
 				 dev->mode_config.num_crtc, 4);
 	if (ret) {
 		kfree(fbcon);

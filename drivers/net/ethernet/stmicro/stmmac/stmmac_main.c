@@ -1971,7 +1971,7 @@ static inline void stmmac_rx_refill(struct stmmac_priv *priv)
 			RX_DBG(KERN_INFO "\trefill entry #%d\n", entry);
 		}
 		wmb();
-		priv->hw->desc->set_rx_owner(p);
+		priv->hw->desc->set_rx_owner(p + entry);
 		wmb();
 	}
 }

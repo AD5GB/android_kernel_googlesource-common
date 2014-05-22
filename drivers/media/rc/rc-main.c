@@ -786,9 +786,10 @@ static ssize_t show_protocols(struct device *device,
 	enabled = dev->enabled_protocols;
 	if (dev->driver_type == RC_DRIVER_SCANCODE)
 		allowed = dev->allowed_protos;
-	else if (dev->raw)
+	} else if (dev->raw) {
+		enabled = dev->raw->enabled_protocols;
 		allowed = ir_raw_get_allowed_protocols();
-	else {
+	} else {
 		mutex_unlock(&dev->lock);
 		return -ENODEV;
 	}

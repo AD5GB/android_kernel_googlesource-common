@@ -5512,7 +5512,11 @@ static void b43_ssb_remove(struct ssb_device *sdev)
 	B43_WARN_ON(!wl);
 	if (!wldev->fw.ucode.data)
 		return;			/* NULL if firmware never loaded */
-	if (wl->current_dev == wldev && wl->hw_registred) {
+	if (wl->current_dev == wldev) {
+		/* Restore the queues count before unregistering, because firmware detect
+		 * might have modified it. Restoring is important, so the networking
+		 * stack can properly free resources. */
+		wl->hw->queues = wl->mac80211_initially_registered_queues;
 		b43_leds_stop(wldev);
 		ieee80211_unregister_hw(wl->hw);
 	}

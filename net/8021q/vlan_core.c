@@ -13,7 +13,7 @@ bool vlan_do_receive(struct sk_buff **skbp)
 	struct net_device *vlan_dev;
 	struct vlan_pcpu_stats *rx_stats;
 
-	vlan_dev = vlan_find_dev(skb->dev, vlan_proto, vlan_id);
+	vlan_dev = vlan_find_dev(skb->dev, vlan_id);
 	if (!vlan_dev)
 		return false;
 

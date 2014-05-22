@@ -328,13 +328,6 @@ intel_dp_aux_ch(struct intel_dp *intel_dp,
 	uint32_t status;
 	uint32_t aux_clock_divider;
 	int try, precharge;
-	bool has_aux_irq = INTEL_INFO(dev)->gen >= 5 && !IS_VALLEYVIEW(dev);
-
-	/* dp aux is extremely sensitive to irq latency, hence request the
-	 * lowest possible wakeup latency and so prevent the cpu from going into
-	 * deep sleep states.
-	 */
-	pm_qos_update_request(&dev_priv->pm_qos, 0);
 
 	intel_dp_check_edp(intel_dp);
 	/* The clock divider is based off the hrawclk,
@@ -361,6 +354,11 @@ intel_dp_aux_ch(struct intel_dp *intel_dp,
 	} else {
 		aux_clock_divider = intel_hrawclk(dev) / 2;
 	}
+
+	if (IS_GEN6(dev))
+		precharge = 3;
+	else
+		precharge = 5;
 
 	if (IS_GEN6(dev))
 		precharge = 3;
@@ -604,7 +602,18 @@ intel_dp_i2c_aux_ch(struct i2c_adapter *adapter, int mode,
 			DRM_DEBUG_KMS("aux_ch native nack\n");
 			return -EREMOTEIO;
 		case AUX_NATIVE_REPLY_DEFER:
-			udelay(100);
+			/*
+			 * For now, just give more slack to branch devices. We
+			 * could check the DPCD for I2C bit rate capabilities,
+			 * and if available, adjust the interval. We could also
+			 * be more careful with DP-to-Legacy adapters where a
+			 * long legacy cable may force very low I2C bit rates.
+			 */
+			if (intel_dp->dpcd[DP_DOWNSTREAMPORT_PRESENT] &
+			    DP_DWN_STRM_PORT_PRESENT)
+				usleep_range(500, 600);
+			else
+				usleep_range(300, 400);
 			continue;
 		default:
 			DRM_ERROR("aux_ch invalid native reply 0x%02x\n",
@@ -708,15 +717,20 @@ intel_dp_compute_config(struct intel_encoder *encoder,
 	for (; bpp >= 6*3; bpp -= 2*3) {
 		mode_rate = intel_dp_link_required(target_clock, bpp);
 
-		for (clock = 0; clock <= max_clock; clock++) {
-			for (lane_count = 1; lane_count <= max_lane_count; lane_count <<= 1) {
-				link_clock = drm_dp_bw_code_to_link_rate(bws[clock]);
-				link_avail = intel_dp_max_data_rate(link_clock,
-								    lane_count);
+	for (clock = 0; clock <= max_clock; clock++) {
+		for (lane_count = 1; lane_count <= max_lane_count; lane_count <<= 1) {
+			int link_avail = intel_dp_max_data_rate(intel_dp_link_clock(bws[clock]), lane_count);
 
-				if (mode_rate <= link_avail) {
-					goto found;
-				}
+			if (intel_dp_link_required(mode->clock, bpp)
+					<= link_avail) {
+				intel_dp->link_bw = bws[clock];
+				intel_dp->lane_count = lane_count;
+				adjusted_mode->clock = intel_dp_link_clock(intel_dp->link_bw);
+				DRM_DEBUG_KMS("Display port link bw %02x lane "
+						"count %d clock %d\n",
+				       intel_dp->link_bw, intel_dp->lane_count,
+				       adjusted_mode->clock);
+				return true;
 			}
 		}
 	}
@@ -1136,7 +1150,7 @@ void ironlake_edp_panel_off(struct intel_dp *intel_dp)
 
 	WARN(!intel_dp->want_panel_vdd, "Need VDD to turn off panel\n");
 
-	pp = ironlake_get_pp_control(intel_dp);
+	pp = ironlake_get_pp_control(dev_priv);
 	/* We need to switch off panel power _and_ force vdd, for otherwise some
 	 * panels get very unhappy and cease to work. */
 	pp &= ~(POWER_TARGET_ON | EDP_FORCE_VDD | PANEL_POWER_RESET | EDP_BLC_ENABLE);
@@ -1145,6 +1159,8 @@ void ironlake_edp_panel_off(struct intel_dp *intel_dp)
 
 	I915_WRITE(pp_ctrl_reg, pp);
 	POSTING_READ(pp_ctrl_reg);
+
+	intel_dp->want_panel_vdd = false;
 
 	intel_dp->want_panel_vdd = false;
 
@@ -1294,45 +1310,14 @@ static bool intel_dp_get_hw_state(struct intel_encoder *encoder,
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	u32 tmp = I915_READ(intel_dp->output_reg);
 
-	if (!(tmp & DP_PORT_EN))
-		return false;
 
-	if (is_cpu_edp(intel_dp) && IS_GEN7(dev) && !IS_VALLEYVIEW(dev)) {
-		*pipe = PORT_TO_PIPE_CPT(tmp);
-	} else if (!HAS_PCH_CPT(dev) || is_cpu_edp(intel_dp)) {
-		*pipe = PORT_TO_PIPE(tmp);
-	} else {
-		u32 trans_sel;
-		u32 trans_dp;
-		int i;
-
-		switch (intel_dp->output_reg) {
-		case PCH_DP_B:
-			trans_sel = TRANS_DP_PORT_SEL_B;
-			break;
-		case PCH_DP_C:
-			trans_sel = TRANS_DP_PORT_SEL_C;
-			break;
-		case PCH_DP_D:
-			trans_sel = TRANS_DP_PORT_SEL_D;
-			break;
-		default:
-			return true;
-		}
-
-		for_each_pipe(i) {
-			trans_dp = I915_READ(TRANS_DP_CTL(i));
-			if ((trans_dp & TRANS_DP_PORT_SEL_MASK) == trans_sel) {
-				*pipe = i;
-				return true;
-			}
-		}
-
-		DRM_DEBUG_KMS("No pipe for dp port 0x%x found\n",
-			      intel_dp->output_reg);
-	}
-
-	return true;
+	/* Make sure the panel is off before trying to change the mode. But also
+	 * ensure that we have vdd while we switch off the panel. */
+	ironlake_edp_panel_vdd_on(intel_dp);
+	ironlake_edp_backlight_off(intel_dp);
+	intel_dp_sink_dpms(intel_dp, DRM_MODE_DPMS_ON);
+	ironlake_edp_panel_off(intel_dp);
+	intel_dp_link_down(intel_dp);
 }
 
 static void intel_disable_dp(struct intel_encoder *encoder)
@@ -1370,18 +1355,13 @@ static void intel_enable_dp(struct intel_encoder *encoder)
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	uint32_t dp_reg = I915_READ(intel_dp->output_reg);
 
-	if (WARN_ON(dp_reg & DP_PORT_EN))
-		return;
-
-	ironlake_edp_panel_vdd_on(intel_dp);
-	intel_dp_sink_dpms(intel_dp, DRM_MODE_DPMS_ON);
-	intel_dp_start_link_train(intel_dp);
-	ironlake_edp_panel_on(intel_dp);
-	ironlake_edp_panel_vdd_off(intel_dp, true);
-	intel_dp_complete_link_train(intel_dp);
-	intel_dp_stop_link_train(intel_dp);
-	ironlake_edp_backlight_on(intel_dp);
-}
+	if (mode != DRM_MODE_DPMS_ON) {
+		/* Switching the panel off requires vdd. */
+		ironlake_edp_panel_vdd_on(intel_dp);
+		ironlake_edp_backlight_off(intel_dp);
+		intel_dp_sink_dpms(intel_dp, mode);
+		ironlake_edp_panel_off(intel_dp);
+		intel_dp_link_down(intel_dp);
 
 static void intel_pre_enable_dp(struct intel_encoder *encoder)
 {

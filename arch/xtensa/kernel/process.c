@@ -107,7 +107,16 @@ void coprocessor_flush_all(struct thread_info *ti)
  */
 void arch_cpu_idle(void)
 {
-	platform_idle();
+  	local_irq_enable();
+
+	/* endless idle loop with no priority at all */
+	while (1) {
+		rcu_idle_enter();
+		while (!need_resched())
+			platform_idle();
+		rcu_idle_exit();
+		schedule_preempt_disabled();
+	}
 }
 
 /*

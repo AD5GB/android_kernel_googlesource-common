@@ -776,7 +776,130 @@ pipe_fasync(int fd, struct file *filp, int on)
 	return retval;
 }
 
-struct pipe_inode_info *alloc_pipe_info(void)
+
+static int
+pipe_read_release(struct inode *inode, struct file *filp)
+{
+	return pipe_release(inode, 1, 0);
+}
+
+static int
+pipe_write_release(struct inode *inode, struct file *filp)
+{
+	return pipe_release(inode, 0, 1);
+}
+
+static int
+pipe_rdwr_release(struct inode *inode, struct file *filp)
+{
+	int decr, decw;
+
+	decr = (filp->f_mode & FMODE_READ) != 0;
+	decw = (filp->f_mode & FMODE_WRITE) != 0;
+	return pipe_release(inode, decr, decw);
+}
+
+static int
+pipe_read_open(struct inode *inode, struct file *filp)
+{
+	int ret = -ENOENT;
+
+	mutex_lock(&inode->i_mutex);
+
+	if (inode->i_pipe) {
+		ret = 0;
+		inode->i_pipe->readers++;
+	}
+
+	mutex_unlock(&inode->i_mutex);
+
+	return ret;
+}
+
+static int
+pipe_write_open(struct inode *inode, struct file *filp)
+{
+	int ret = -ENOENT;
+
+	mutex_lock(&inode->i_mutex);
+
+	if (inode->i_pipe) {
+		ret = 0;
+		inode->i_pipe->writers++;
+	}
+
+	mutex_unlock(&inode->i_mutex);
+
+	return ret;
+}
+
+static int
+pipe_rdwr_open(struct inode *inode, struct file *filp)
+{
+	int ret = -ENOENT;
+
+	if (!(filp->f_mode & (FMODE_READ|FMODE_WRITE)))
+		return -EINVAL;
+
+	mutex_lock(&inode->i_mutex);
+
+	if (inode->i_pipe) {
+		ret = 0;
+		if (filp->f_mode & FMODE_READ)
+			inode->i_pipe->readers++;
+		if (filp->f_mode & FMODE_WRITE)
+			inode->i_pipe->writers++;
+	}
+
+	mutex_unlock(&inode->i_mutex);
+
+	return ret;
+}
+
+/*
+ * The file_operations structs are not static because they
+ * are also used in linux/fs/fifo.c to do operations on FIFOs.
+ *
+ * Pipes reuse fifos' file_operations structs.
+ */
+const struct file_operations read_pipefifo_fops = {
+	.llseek		= no_llseek,
+	.read		= do_sync_read,
+	.aio_read	= pipe_read,
+	.write		= bad_pipe_w,
+	.poll		= pipe_poll,
+	.unlocked_ioctl	= pipe_ioctl,
+	.open		= pipe_read_open,
+	.release	= pipe_read_release,
+	.fasync		= pipe_read_fasync,
+};
+
+const struct file_operations write_pipefifo_fops = {
+	.llseek		= no_llseek,
+	.read		= bad_pipe_r,
+	.write		= do_sync_write,
+	.aio_write	= pipe_write,
+	.poll		= pipe_poll,
+	.unlocked_ioctl	= pipe_ioctl,
+	.open		= pipe_write_open,
+	.release	= pipe_write_release,
+	.fasync		= pipe_write_fasync,
+};
+
+const struct file_operations rdwr_pipefifo_fops = {
+	.llseek		= no_llseek,
+	.read		= do_sync_read,
+	.aio_read	= pipe_read,
+	.write		= do_sync_write,
+	.aio_write	= pipe_write,
+	.poll		= pipe_poll,
+	.unlocked_ioctl	= pipe_ioctl,
+	.open		= pipe_rdwr_open,
+	.release	= pipe_rdwr_release,
+	.fasync		= pipe_rdwr_fasync,
+};
+
+struct pipe_inode_info * alloc_pipe_info(struct inode *inode)
 {
 	struct pipe_inode_info *pipe;
 

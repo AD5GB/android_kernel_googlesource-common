@@ -204,26 +204,50 @@ static int ehci_hcd_omap_probe(struct platform_device *pdev)
 	ehci_write(regs, EHCI_INSNREG04,
 				EHCI_INSNREG04_DISABLE_UNSUSPEND);
 
-	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
-	if (ret) {
-		dev_err(dev, "failed to add hcd with err %d\n", ret);
-		goto err_pm_runtime;
-	}
+	/* Soft reset the PHY using PHY reset command over ULPI */
+	if (pdata->port_mode[0] == OMAP_EHCI_PORT_MODE_PHY)
+		omap_ehci_soft_phy_reset(pdev, 0);
+	if (pdata->port_mode[1] == OMAP_EHCI_PORT_MODE_PHY)
+		omap_ehci_soft_phy_reset(pdev, 1);
 
-	/*
-	 * Bring PHYs out of reset.
-	 * Even though HSIC mode is a PHY-less mode, the reset
-	 * line exists between the chips and can be modelled
-	 * as a PHY device for reset control.
-	 */
-	for (i = 0; i < omap->nports; i++) {
-		if (!omap->phy[i])
-			continue;
+	omap_ehci = hcd_to_ehci(hcd);
+	omap_ehci->sbrn = 0x20;
+
+	/* we know this is the memory we want, no need to ioremap again */
+	omap_ehci->caps = hcd->regs;
+	omap_ehci->regs = hcd->regs
+		+ HC_LENGTH(ehci, readl(&omap_ehci->caps->hc_capbase));
+
+	dbg_hcs_params(omap_ehci, "reset");
+	dbg_hcc_params(omap_ehci, "reset");
+
+	/* cache this readonly data; minimize chip reads */
+	omap_ehci->hcs_params = readl(&omap_ehci->caps->hcs_params);
+
+	ehci_reset(omap_ehci);
+
+	if (pdata->phy_reset) {
+		/* Hold the PHY in RESET for enough time till
+		 * PHY is settled and ready
+		 */
+		udelay(10);
+
+		if (gpio_is_valid(pdata->reset_gpio_port[0]))
+			gpio_set_value(pdata->reset_gpio_port[0], 1);
 
 		usb_phy_init(omap->phy[i]);
 		/* bring PHY out of suspend */
 		usb_phy_set_suspend(omap->phy[i], 0);
 	}
+
+	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
+	if (ret) {
+		dev_err(dev, "failed to add hcd with err %d\n", ret);
+		goto err_add_hcd;
+	}
+
+	/* root ports should always stay powered */
+	ehci_port_power(omap_ehci, 1);
 
 	return 0;
 

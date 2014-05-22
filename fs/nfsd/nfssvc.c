@@ -11,6 +11,7 @@
 #include <linux/module.h>
 #include <linux/fs_struct.h>
 #include <linux/swap.h>
+#include <linux/nsproxy.h>
 
 #include <linux/sunrpc/stats.h>
 #include <linux/sunrpc/svcsock.h>
@@ -224,31 +225,7 @@ static int nfsd_startup_generic(int nrservs)
 	ret = nfs4_state_start();
 	if (ret)
 		goto out_racache;
-	return 0;
-
-out_racache:
-	nfsd_racache_shutdown();
-	return ret;
-}
-
-static void nfsd_shutdown_generic(void)
-{
-	if (--nfsd_users)
-		return;
-
-	nfs4_state_shutdown();
-	nfsd_racache_shutdown();
-}
-
-static int nfsd_startup_net(int nrservs, struct net *net)
-{
-	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
-	int ret;
-
-	if (nn->nfsd_net_up)
-		return 0;
-
-	ret = nfsd_startup_generic(nrservs);
+	ret = lockd_up(&init_net);
 	if (ret)
 		return ret;
 	ret = nfsd_init_socks(net);
@@ -265,9 +242,9 @@ static int nfsd_startup_net(int nrservs, struct net *net)
 	return 0;
 
 out_lockd:
-	lockd_down(net);
-out_socks:
-	nfsd_shutdown_generic();
+	lockd_down(&init_net);
+out_racache:
+	nfsd_racache_shutdown();
 	return ret;
 }
 
@@ -293,7 +270,15 @@ static void nfsd_last_thread(struct svc_serv *serv, struct net *net)
 	 */
 	if (!nn->nfsd_net_up)
 		return;
-	nfsd_shutdown_net(net);
+	nfs4_state_shutdown();
+	lockd_down(&init_net);
+	nfsd_racache_shutdown();
+	nfsd_up = false;
+}
+
+static void nfsd_last_thread(struct svc_serv *serv, struct net *net)
+{
+	nfsd_shutdown();
 
 	svc_rpcb_cleanup(serv, net);
 
@@ -369,7 +354,7 @@ static int nfsd_get_default_max_blksize(void)
 int nfsd_create_serv(struct net *net)
 {
 	int error;
-	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+	struct net *net = current->nsproxy->net_ns;
 
 	WARN_ON(!mutex_is_locked(&nfsd_mutex));
 	if (nn->nfsd_serv) {
@@ -384,9 +369,9 @@ int nfsd_create_serv(struct net *net)
 	if (nn->nfsd_serv == NULL)
 		return -ENOMEM;
 
-	error = svc_bind(nn->nfsd_serv, net);
+	error = svc_bind(nfsd_serv, net);
 	if (error < 0) {
-		svc_destroy(nn->nfsd_serv);
+		svc_destroy(nfsd_serv);
 		return error;
 	}
 
@@ -435,7 +420,7 @@ int nfsd_set_nrthreads(int n, int *nthreads, struct net *net)
 	int i = 0;
 	int tot = 0;
 	int err = 0;
-	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+	struct net *net = &init_net;
 
 	WARN_ON(!mutex_is_locked(&nfsd_mutex));
 
@@ -494,7 +479,7 @@ nfsd_svc(int nrservs, struct net *net)
 {
 	int	error;
 	bool	nfsd_up_before;
-	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+	struct net *net = &init_net;
 
 	mutex_lock(&nfsd_mutex);
 	dprintk("nfsd: creating service\n");
@@ -607,7 +592,7 @@ out:
 	/* Release the thread */
 	svc_exit_thread(rqstp);
 
-	nfsd_destroy(net);
+	nfsd_destroy(&init_net);
 
 	/* Release module */
 	mutex_unlock(&nfsd_mutex);
@@ -719,7 +704,7 @@ int nfsd_pool_stats_open(struct inode *inode, struct file *file)
 int nfsd_pool_stats_release(struct inode *inode, struct file *file)
 {
 	int ret = seq_release(inode, file);
-	struct net *net = inode->i_sb->s_fs_info;
+	struct net *net = &init_net;
 
 	mutex_lock(&nfsd_mutex);
 	/* this function really, really should have been called svc_put() */

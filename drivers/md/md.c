@@ -3889,13 +3889,17 @@ array_state_store(struct mddev *mddev, const char *buf, size_t len)
 		break;
 	case clear:
 		/* stopping an active array */
+		if (atomic_read(&mddev->openers) > 0)
+			return -EBUSY;
 		err = do_md_stop(mddev, 0, NULL);
 		break;
 	case inactive:
 		/* stopping an active array */
-		if (mddev->pers)
+		if (mddev->pers) {
+			if (atomic_read(&mddev->openers) > 0)
+				return -EBUSY;
 			err = do_md_stop(mddev, 2, NULL);
-		else
+		} else
 			err = 0; /* already inactive */
 		break;
 	case suspended:
@@ -6486,24 +6490,12 @@ static int md_ioctl(struct block_device *bdev, fmode_t mode,
 		err = md_set_readonly(mddev, bdev);
 		goto done_unlock;
 
-	case HOT_REMOVE_DISK:
-		err = hot_remove_disk(mddev, new_decode_dev(arg));
-		goto done_unlock;
+		case STOP_ARRAY:
+			err = do_md_stop(mddev, 0, bdev);
+			goto done_unlock;
 
-	case ADD_NEW_DISK:
-		/* We can support ADD_NEW_DISK on read-only arrays
-		 * on if we are re-adding a preexisting device.
-		 * So require mddev->pers and MD_DISK_SYNC.
-		 */
-		if (mddev->pers) {
-			mdu_disk_info_t info;
-			if (copy_from_user(&info, argp, sizeof(info)))
-				err = -EFAULT;
-			else if (!(info.state & (1<<MD_DISK_SYNC)))
-				/* Need to clear read-only for this */
-				break;
-			else
-				err = add_new_disk(mddev, &info);
+		case STOP_ARRAY_RO:
+			err = md_set_readonly(mddev, bdev);
 			goto done_unlock;
 		}
 		break;
@@ -7720,10 +7712,54 @@ static int remove_and_add_spares(struct mddev *mddev,
 			set_bit(MD_CHANGE_DEVS, &mddev->flags);
 		}
 	}
-no_add:
 	if (removed)
 		set_bit(MD_CHANGE_DEVS, &mddev->flags);
 	return spares;
+}
+
+static void reap_sync_thread(struct mddev *mddev)
+{
+	struct md_rdev *rdev;
+
+	/* resync has finished, collect result */
+	md_unregister_thread(&mddev->sync_thread);
+	if (!test_bit(MD_RECOVERY_INTR, &mddev->recovery) &&
+	    !test_bit(MD_RECOVERY_REQUESTED, &mddev->recovery)) {
+		/* success...*/
+		/* activate any spares */
+		if (mddev->pers->spare_active(mddev)) {
+			sysfs_notify(&mddev->kobj, NULL,
+				     "degraded");
+			set_bit(MD_CHANGE_DEVS, &mddev->flags);
+		}
+	}
+	if (test_bit(MD_RECOVERY_RESHAPE, &mddev->recovery) &&
+	    mddev->pers->finish_reshape)
+		mddev->pers->finish_reshape(mddev);
+
+	/* If array is no-longer degraded, then any saved_raid_disk
+	 * information must be scrapped.  Also if any device is now
+	 * In_sync we must scrape the saved_raid_disk for that device
+	 * do the superblock for an incrementally recovered device
+	 * written out.
+	 */
+	rdev_for_each(rdev, mddev)
+		if (!mddev->degraded ||
+		    test_bit(In_sync, &rdev->flags))
+			rdev->saved_raid_disk = -1;
+
+	md_update_sb(mddev, 1);
+	clear_bit(MD_RECOVERY_RUNNING, &mddev->recovery);
+	clear_bit(MD_RECOVERY_SYNC, &mddev->recovery);
+	clear_bit(MD_RECOVERY_RESHAPE, &mddev->recovery);
+	clear_bit(MD_RECOVERY_REQUESTED, &mddev->recovery);
+	clear_bit(MD_RECOVERY_CHECK, &mddev->recovery);
+	/* flag recovery needed just to double check */
+	set_bit(MD_RECOVERY_NEEDED, &mddev->recovery);
+	sysfs_notify_dirent_safe(mddev->sysfs_action);
+	md_new_event(mddev);
+	if (mddev->event_work.func)
+		queue_work(md_misc_wq, &mddev->event_work);
 }
 
 /*

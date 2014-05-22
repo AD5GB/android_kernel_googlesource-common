@@ -30,7 +30,7 @@ void doorbell_cause_ipi(int cpu, unsigned long data)
 {
 	/* Order previous accesses vs. msgsnd, which is treated as a store */
 	mb();
-	ppc_msgsnd(PPC_DBELL_MSGTYPE, 0, data);
+	ppc_msgsnd(PPC_DBELL, 0, data);
 }
 
 void doorbell_exception(struct pt_regs *regs)

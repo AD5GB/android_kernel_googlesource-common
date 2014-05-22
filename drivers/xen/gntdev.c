@@ -213,12 +213,6 @@ static void gntdev_put_map(struct gntdev_priv *priv, struct grant_map *map)
 		evtchn_put(map->notify.event);
 	}
 
-	if (populate_freeable_maps && priv) {
-		spin_lock(&priv->lock);
-		list_del(&map->next);
-		spin_unlock(&priv->lock);
-	}
-
 	if (map->pages && !use_ptemod)
 		unmap_grant_pages(map, 0, map->count);
 	gntdev_free_map(map);

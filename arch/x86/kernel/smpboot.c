@@ -908,7 +908,7 @@ int __cpuinit native_cpu_up(unsigned int cpu, struct task_struct *tidle)
 	/* the FPU context is blank, nobody can own it */
 	__cpu_disable_lazy_restore(cpu);
 
-	err = do_boot_cpu(apicid, cpu, tidle);
+	err = do_boot_cpu(apicid, cpu);
 	if (err) {
 		pr_debug("do_boot_cpu failed %d\n", err);
 		return -EIO;

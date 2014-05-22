@@ -49,6 +49,7 @@
 #include <net/udp.h>
 #include <net/udplite.h>
 #include <net/tcp.h>
+#include <net/ipip.h>
 #include <net/ping.h>
 #include <net/protocol.h>
 #include <net/inet_common.h>

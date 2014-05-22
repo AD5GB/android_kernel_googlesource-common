@@ -1600,6 +1600,11 @@ static int snd_soc_instantiate_card(struct snd_soc_card *card)
 
 	mutex_lock_nested(&card->mutex, SND_SOC_CARD_CLASS_INIT);
 
+	if (card->instantiated) {
+		mutex_unlock(&card->mutex);
+		return;
+	}
+
 	/* bind DAIs */
 	for (i = 0; i < card->num_links; i++) {
 		ret = soc_bind_dai_link(card, i);

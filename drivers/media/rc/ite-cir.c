@@ -1472,7 +1472,7 @@ static int ite_probe(struct pnp_dev *pdev, const struct pnp_device_id
 	/* input device for IR remote (and tx) */
 	rdev = rc_allocate_device();
 	if (!rdev)
-		goto exit_free_dev_rdev;
+		goto failure;
 	itdev->rdev = rdev;
 
 	ret = -ENODEV;

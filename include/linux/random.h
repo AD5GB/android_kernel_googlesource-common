@@ -8,6 +8,22 @@
 
 #include <uapi/linux/random.h>
 
+/* Clear the entropy pool and associated counters.  (Superuser only.) */
+#define RNDCLEARPOOL	_IO( 'R', 0x06 )
+
+struct rand_pool_info {
+	int	entropy_count;
+	int	buf_size;
+	__u32	buf[0];
+};
+
+struct rnd_state {
+	__u32 s1, s2, s3;
+};
+
+/* Exported functions */
+
+#ifdef __KERNEL__
 
 extern void add_device_randomness(const void *, unsigned int);
 extern void add_input_randomness(unsigned int type, unsigned int code,
@@ -17,6 +33,7 @@ extern void add_interrupt_randomness(int irq, int irq_flags);
 extern void get_random_bytes(void *buf, int nbytes);
 extern void get_random_bytes_arch(void *buf, int nbytes);
 void generate_random_uuid(unsigned char uuid_out[16]);
+extern int random_int_secret_init(void);
 
 #ifndef MODULE
 extern const struct file_operations random_fops, urandom_fops;

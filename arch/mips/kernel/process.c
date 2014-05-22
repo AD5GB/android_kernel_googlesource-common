@@ -43,11 +43,13 @@
 #include <asm/stacktrace.h>
 
 #ifdef CONFIG_HOTPLUG_CPU
-void arch_cpu_idle_dead(void)
-{
-	/* What the heck is this check doing ? */
-	if (!cpu_isset(smp_processor_id(), cpu_callin_map))
-		play_dead();
+		if (!cpu_online(cpu) && !cpu_isset(cpu, cpu_callin_map))
+			play_dead();
+#endif
+		rcu_idle_exit();
+		tick_nohz_idle_exit();
+		schedule_preempt_disabled();
+	}
 }
 #endif
 

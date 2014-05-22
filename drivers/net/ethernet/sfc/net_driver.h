@@ -69,27 +69,6 @@
 #define EFX_TXQ_TYPES		4
 #define EFX_MAX_TX_QUEUES	(EFX_TXQ_TYPES * EFX_MAX_CHANNELS)
 
-/* Maximum possible MTU the driver supports */
-#define EFX_MAX_MTU (9 * 1024)
-
-/* Size of an RX scatter buffer.  Small enough to pack 2 into a 4K page,
- * and should be a multiple of the cache line size.
- */
-#define EFX_RX_USR_BUF_SIZE	(2048 - 256)
-
-/* If possible, we should ensure cache line alignment at start and end
- * of every buffer.  Otherwise, we just need to ensure 4-byte
- * alignment of the network header.
- */
-#if NET_IP_ALIGN == 0
-#define EFX_RX_BUF_ALIGNMENT	L1_CACHE_BYTES
-#else
-#define EFX_RX_BUF_ALIGNMENT	4
-#endif
-
-/* Forward declare Precision Time Protocol (PTP) support structure. */
-struct efx_ptp_data;
-
 struct efx_self_tests;
 
 /**
@@ -226,16 +205,16 @@ struct efx_tx_queue {
  * @dma_addr: DMA base address of the buffer
  * @page: The associated page buffer.
  *	Will be %NULL if the buffer slot is currently free.
- * @page_offset: If pending: offset in @page of DMA base address.
- *	If completed: offset in @page of Ethernet header.
- * @len: If pending: length for DMA descriptor.
- *	If completed: received length, excluding hash prefix.
- * @flags: Flags for buffer and packet state.  These are only set on the
- *	first buffer of a scattered packet.
+ * @page_offset: Offset within page. Valid iff @flags & %EFX_RX_BUF_PAGE.
+ * @len: Buffer length, in bytes.
+ * @flags: Flags for buffer and packet state.
  */
 struct efx_rx_buffer {
 	dma_addr_t dma_addr;
-	struct page *page;
+	union {
+		struct sk_buff *skb;
+		struct page *page;
+	} u;
 	u16 page_offset;
 	u16 len;
 	u16 flags;

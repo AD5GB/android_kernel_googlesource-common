@@ -571,7 +571,7 @@ static int __decode_pool_names(void **p, void *end, struct ceph_osdmap *map)
 	while (num--) {
 		ceph_decode_64_safe(p, end, pool, bad);
 		ceph_decode_32_safe(p, end, len, bad);
-		dout("  pool %llu len %d\n", pool, len);
+		dout("  pool %d len %d\n", pool, len);
 		ceph_decode_need(p, end, len, bad);
 		pi = __lookup_pg_pool(&map->pg_pools, pool);
 		if (pi) {
@@ -691,12 +691,20 @@ struct ceph_osdmap *osdmap_decode(void **p, void *end)
 
 	ceph_decode_32_safe(p, end, max, bad);
 	while (max--) {
-		ceph_decode_need(p, end, 8 + 2, bad);
+		ceph_decode_need(p, end, 4 + 1 + sizeof(pi->v), bad);
 		err = -ENOMEM;
 		pi = kzalloc(sizeof(*pi), GFP_NOFS);
 		if (!pi)
 			goto bad;
-		pi->id = ceph_decode_64(p);
+		pi->id = ceph_decode_32(p);
+		err = -EINVAL;
+		ev = ceph_decode_8(p); /* encoding version */
+		if (ev > CEPH_PG_POOL_VERSION) {
+			pr_warning("got unknown v %d > %d of ceph_pg_pool\n",
+				   ev, CEPH_PG_POOL_VERSION);
+			kfree(pi);
+			goto bad;
+		}
 		err = __decode_pool(p, end, pi);
 		if (err < 0) {
 			kfree(pi);
@@ -705,10 +713,12 @@ struct ceph_osdmap *osdmap_decode(void **p, void *end)
 		__insert_pg_pool(&map->pg_pools, pi);
 	}
 
-	err = __decode_pool_names(p, end, map);
-	if (err < 0) {
-		dout("fail to decode pool names");
-		goto bad;
+	if (version >= 5) {
+		err = __decode_pool_names(p, end, map);
+		if (err < 0) {
+			dout("fail to decode pool names");
+			goto bad;
+		}
 	}
 
 	ceph_decode_32_safe(p, end, map->pool_max, bad);
@@ -880,7 +890,15 @@ struct ceph_osdmap *osdmap_apply_incremental(void **p, void *end,
 	while (len--) {
 		struct ceph_pg_pool_info *pi;
 
-		ceph_decode_64_safe(p, end, pool, bad);
+		ceph_decode_32_safe(p, end, pool, bad);
+		ceph_decode_need(p, end, 1 + sizeof(pi->v), bad);
+		ev = ceph_decode_8(p);  /* encoding version */
+		if (ev > CEPH_PG_POOL_VERSION) {
+			pr_warning("got unknown v %d > %d of ceph_pg_pool\n",
+				   ev, CEPH_PG_POOL_VERSION);
+			err = -EINVAL;
+			goto bad;
+		}
 		pi = __lookup_pg_pool(&map->pg_pools, pool);
 		if (!pi) {
 			pi = kzalloc(sizeof(*pi), GFP_NOFS);
@@ -1028,7 +1046,7 @@ bad:
  * pass a stride back to the caller.
  */
 int ceph_calc_file_object_mapping(struct ceph_file_layout *layout,
-				   u64 off, u64 len,
+				   u64 off, u64 *plen,
 				   u64 *ono,
 				   u64 *oxoff, u64 *oxlen)
 {

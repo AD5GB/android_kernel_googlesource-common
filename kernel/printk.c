@@ -55,6 +55,10 @@
 extern void printascii(char *);
 #endif
 
+#ifdef        CONFIG_DEBUG_LL
+extern void printascii(char *);
+#endif
+
 /* printk's without a loglevel use this.. */
 #define DEFAULT_MESSAGE_LOGLEVEL CONFIG_DEFAULT_MESSAGE_LOGLEVEL
 
@@ -1056,21 +1060,58 @@ static int syslog_print_all(char __user *buf, int size, bool clear)
 			clear_idx = log_first_idx;
 		}
 
-		/*
-		 * Find first record that fits, including all following records,
-		 * into the user-provided buffer for this dump.
-		 */
-		seq = clear_seq;
-		idx = clear_idx;
-		prev = 0;
-		while (seq < log_next_seq) {
-			struct log *msg = log_from_idx(idx);
+/*
+ * Return the number of unread characters in the log buffer.
+ */
+static int log_buf_get_len(void)
+{
+	return logged_chars;
+}
 
-			len += msg_print_text(msg, prev, true, NULL, 0);
-			prev = msg->flags;
-			idx = log_next(idx);
-			seq++;
-		}
+/*
+ * Clears the ring-buffer
+ */
+void log_buf_clear(void)
+{
+	logged_chars = 0;
+}
+
+/*
+ * Copy a range of characters from the log buffer.
+ */
+int log_buf_copy(char *dest, int idx, int len)
+{
+	int ret, max;
+	bool took_lock = false;
+
+	if (!oops_in_progress) {
+		raw_spin_lock_irq(&logbuf_lock);
+		took_lock = true;
+	}
+
+	max = log_buf_get_len();
+	if (idx < 0 || idx >= max) {
+		ret = -1;
+	} else {
+		if (len > max - idx)
+			len = max - idx;
+		ret = len;
+		idx += (log_end - max);
+		while (len-- > 0)
+			dest[len] = LOG_BUF(idx + len);
+	}
+
+	if (took_lock)
+		raw_spin_unlock_irq(&logbuf_lock);
+
+	return ret;
+}
+
+#ifdef CONFIG_SECURITY_DMESG_RESTRICT
+int dmesg_restrict = 1;
+#else
+int dmesg_restrict;
+#endif
 
 		/* move first record forward until length fits into the buffer */
 		seq = clear_seq;
@@ -1276,10 +1317,48 @@ static void call_console_drivers(int level, const char *text, size_t len)
 
 	trace_console(text, len);
 
-	if (level >= console_loglevel && !ignore_loglevel)
-		return;
-	if (!console_drivers)
-		return;
+	cur_index = start;
+	start_print = start;
+	while (cur_index != end) {
+		if (msg_level < 0 && ((end - cur_index) > 2)) {
+			/*
+			 * prepare buf_prefix, as a contiguous array,
+			 * to be processed by log_prefix function
+			 */
+			char buf_prefix[SYSLOG_PRI_MAX_LENGTH+1];
+			unsigned i;
+			for (i = 0; i < ((end - cur_index)) && (i < SYSLOG_PRI_MAX_LENGTH); i++) {
+				buf_prefix[i] = LOG_BUF(cur_index + i);
+			}
+			buf_prefix[i] = '\0'; /* force '\0' as last string character */
+
+			/* strip log prefix */
+			cur_index += log_prefix((const char *)&buf_prefix, &msg_level, NULL);
+			start_print = cur_index;
+		}
+		while (cur_index != end) {
+			char c = LOG_BUF(cur_index);
+
+			cur_index++;
+			if (c == '\n') {
+				if (msg_level < 0) {
+					/*
+					 * printk() has already given us loglevel tags in
+					 * the buffer.  This code is here in case the
+					 * log buffer has wrapped right round and scribbled
+					 * on those tags
+					 */
+					msg_level = default_message_loglevel;
+				}
+				_call_console_drivers(start_print, cur_index, msg_level);
+				msg_level = -1;
+				start_print = cur_index;
+				break;
+			}
+		}
+	}
+	_call_console_drivers(start_print, end, msg_level);
+}
 
 	for_each_console(con) {
 		if (exclusive_console && con != exclusive_console)
@@ -1550,11 +1629,11 @@ asmlinkage int vprintk_emit(int facility, int level,
 			  NULL, 0, recursion_msg, printed_len);
 	}
 
-	/*
-	 * The printf needs to come first; we need the syslog
-	 * prefix which might be passed-in as a parameter.
-	 */
-	text_len = vscnprintf(text, sizeof(textbuf), fmt, args);
+#ifdef	CONFIG_DEBUG_LL
+	printascii(printk_buf);
+#endif
+
+	p = printk_buf;
 
 	/* mark and strip a trailing newline */
 	if (text_len && text[text_len-1] == '\n') {

@@ -197,7 +197,7 @@ static int load_misc_binary(struct linux_binprm *bprm)
 	if (retval < 0)
 		goto _error;
 
-	retval = search_binary_handler(bprm);
+	retval = search_binary_handler (bprm, regs);
 	if (retval < 0)
 		goto _error;
 

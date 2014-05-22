@@ -336,7 +336,7 @@ static void icmp_reply(struct icmp_bxm *icmp_param, struct sk_buff *skb)
 	struct flowi4 fl4;
 	struct sock *sk;
 	struct inet_sock *inet;
-	__be32 daddr, saddr;
+	__be32 daddr;
 	u32 mark = IP4_REPLY_MARK(net, skb->mark);
 
 	if (ip_options_echo(&icmp_param->replyopts.opt.opt, skb))
@@ -362,7 +362,7 @@ static void icmp_reply(struct icmp_bxm *icmp_param, struct sk_buff *skb)
 	}
 	memset(&fl4, 0, sizeof(fl4));
 	fl4.daddr = daddr;
-	fl4.saddr = saddr;
+	fl4.saddr = rt->rt_spec_dst;
 	fl4.flowi4_mark = mark;
 	fl4.flowi4_tos = RT_TOS(ip_hdr(skb)->tos);
 	fl4.flowi4_proto = IPPROTO_ICMP;
@@ -768,8 +768,13 @@ static void icmp_redirect(struct sk_buff *skb)
 		return;
 	}
 
-	if (!pskb_may_pull(skb, sizeof(struct iphdr)))
-		return;
+	/* Ping wants to see redirects.
+         * Let's pretend they are errors of sorts... */
+	if (iph->protocol == IPPROTO_ICMP &&
+	    iph->ihl >= 5 &&
+	    pskb_may_pull(skb, (iph->ihl<<2)+8)) {
+		ping_v4_err(skb, icmp_hdr(skb)->un.gateway);
+	}
 
 	icmp_socket_deliver(skb, icmp_hdr(skb)->un.gateway);
 }

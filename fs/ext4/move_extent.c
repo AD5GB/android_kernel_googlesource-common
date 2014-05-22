@@ -144,13 +144,12 @@ mext_next_extent(struct inode *inode, struct ext4_ext_path *path,
 }
 
 /**
- * ext4_double_down_write_data_sem - Acquire two inodes' write lock
- *                                   of i_data_sem
+ * double_down_write_data_sem - Acquire two inodes' write lock of i_data_sem
  *
  * Acquire write lock of i_data_sem of the two inodes
  */
-void
-ext4_double_down_write_data_sem(struct inode *first, struct inode *second)
+static void
+double_down_write_data_sem(struct inode *first, struct inode *second)
 {
 	if (first < second) {
 		down_write(&EXT4_I(first)->i_data_sem);
@@ -1213,8 +1212,8 @@ mext_check_arguments(struct inode *orig_inode,
  *
  * Lock two inodes' i_mutex
  */
-void
-ext4_inode_double_lock(struct inode *inode1, struct inode *inode2)
+static void
+mext_inode_double_lock(struct inode *inode1, struct inode *inode2)
 {
 	BUG_ON(inode1 == inode2);
 	if (inode1 < inode2) {
@@ -1234,8 +1233,8 @@ ext4_inode_double_lock(struct inode *inode1, struct inode *inode2)
  *
  */
 
-void
-ext4_inode_double_unlock(struct inode *inode1, struct inode *inode2)
+static void
+mext_inode_double_unlock(struct inode *inode1, struct inode *inode2)
 {
 	mutex_unlock(&inode1->i_mutex);
 	mutex_unlock(&inode2->i_mutex);
@@ -1330,13 +1329,7 @@ ext4_move_extents(struct file *o_filp, struct file *d_filp,
 		return -EINVAL;
 	}
 	/* Protect orig and donor inodes against a truncate */
-	ext4_inode_double_lock(orig_inode, donor_inode);
-
-	/* Wait for all existing dio workers */
-	ext4_inode_block_unlocked_dio(orig_inode);
-	ext4_inode_block_unlocked_dio(donor_inode);
-	inode_dio_wait(orig_inode);
-	inode_dio_wait(donor_inode);
+	mext_inode_double_lock(orig_inode, donor_inode);
 
 	/* Protect extent tree against block allocations via delalloc */
 	ext4_double_down_write_data_sem(orig_inode, donor_inode);
@@ -1497,7 +1490,7 @@ ext4_move_extents(struct file *o_filp, struct file *d_filp,
 				block_len_in_page = rest_blocks;
 		}
 
-		ext4_double_down_write_data_sem(orig_inode, donor_inode);
+		double_down_write_data_sem(orig_inode, donor_inode);
 		if (ret < 0)
 			break;
 
@@ -1535,10 +1528,8 @@ out:
 		ext4_ext_drop_refs(holecheck_path);
 		kfree(holecheck_path);
 	}
-	ext4_double_up_write_data_sem(orig_inode, donor_inode);
-	ext4_inode_resume_unlocked_dio(orig_inode);
-	ext4_inode_resume_unlocked_dio(donor_inode);
-	ext4_inode_double_unlock(orig_inode, donor_inode);
+	double_up_write_data_sem(orig_inode, donor_inode);
+	mext_inode_double_unlock(orig_inode, donor_inode);
 
 	return ret;
 }

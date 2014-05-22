@@ -540,6 +540,9 @@ static int do_signal(struct pt_regs *regs, int syscall)
 		}
 	}
 
+	if (try_to_freeze_nowarn())
+		goto no_signal;
+
 	/*
 	 * Get the signal to deliver.  When running under ptrace, at this
 	 * point the debugger may change all our registers ...

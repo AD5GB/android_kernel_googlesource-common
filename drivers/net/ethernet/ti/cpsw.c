@@ -463,7 +463,6 @@ void cpsw_tx_handler(void *token, int len, int status)
 	 */
 	if (unlikely(netif_queue_stopped(ndev)))
 		netif_wake_queue(ndev);
-	cpts_tx_timestamp(priv->cpts, skb);
 	priv->stats.tx_packets++;
 	priv->stats.tx_bytes += len;
 	dev_kfree_skb_any(skb);

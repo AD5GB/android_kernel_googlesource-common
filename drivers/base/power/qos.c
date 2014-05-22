@@ -539,7 +539,7 @@ int dev_pm_qos_add_ancestor_request(struct device *dev,
 		ret = dev_pm_qos_add_request(ancestor, req,
 					     DEV_PM_QOS_LATENCY, value);
 
-	if (ret < 0)
+	if (error < 0)
 		req->dev = NULL;
 
 	return ret;

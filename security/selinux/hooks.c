@@ -422,6 +422,13 @@ static int sb_finish_set_opts(struct super_block *sb)
 	if (strncmp(sb->s_type->name, "sysfs", sizeof("sysfs")) == 0)
 		sbsec->flags |= SE_SBLABELSUPP;
 
+	/*
+	 * Special handling for rootfs. Is genfs but supports
+	 * setting SELinux context on in-core inodes.
+	 */
+	if (strncmp(sb->s_type->name, "rootfs", sizeof("rootfs")) == 0)
+		sbsec->flags |= SE_SBLABELSUPP;
+
 	/* Initialize the root inode. */
 	rc = inode_doinit_with_dentry(root_inode, root);
 
@@ -1878,7 +1885,7 @@ static int selinux_binder_transfer_file(struct task_struct *from, struct task_st
 	struct selinux_audit_data sad = {0,};
 	int rc;
 
-	ad.type = LSM_AUDIT_DATA_PATH;
+	COMMON_AUDIT_DATA_INIT(&ad, PATH);
 	ad.u.path = file->f_path;
 	ad.selinux_audit_data = &sad;
 
@@ -2240,15 +2247,62 @@ static inline void flush_unauthorized_files(const struct cred *cred,
 	if (!n) /* none found? */
 		return;
 
-	devnull = dentry_open(&selinux_null, O_RDWR, cred);
-	if (IS_ERR(devnull))
-		devnull = NULL;
-	/* replace all the matching ones with this */
-	do {
-		replace_fd(n - 1, devnull, 0);
-	} while ((n = iterate_fd(files, n, match_file, cred)) != 0);
-	if (devnull)
-		fput(devnull);
+	COMMON_AUDIT_DATA_INIT(&ad, INODE);
+	ad.selinux_audit_data = &sad;
+
+	spin_lock(&files->file_lock);
+	for (;;) {
+		unsigned long set, i;
+		int fd;
+
+		j++;
+		i = j * BITS_PER_LONG;
+		fdt = files_fdtable(files);
+		if (i >= fdt->max_fds)
+			break;
+		set = fdt->open_fds[j];
+		if (!set)
+			continue;
+		spin_unlock(&files->file_lock);
+		for ( ; set ; i++, set >>= 1) {
+			if (set & 1) {
+				file = fget(i);
+				if (!file)
+					continue;
+				if (file_has_perm(cred,
+						  file,
+						  file_to_av(file))) {
+					sys_close(i);
+					fd = get_unused_fd();
+					if (fd != i) {
+						if (fd >= 0)
+							put_unused_fd(fd);
+						fput(file);
+						continue;
+					}
+					if (devnull) {
+						get_file(devnull);
+					} else {
+						devnull = dentry_open(
+							dget(selinux_null),
+							mntget(selinuxfs_mount),
+							O_RDWR, cred);
+						if (IS_ERR(devnull)) {
+							devnull = NULL;
+							put_unused_fd(fd);
+							fput(file);
+							continue;
+						}
+					}
+					fd_install(fd, devnull);
+				}
+				fput(file);
+			}
+		}
+		spin_lock(&files->file_lock);
+
+	}
+	spin_unlock(&files->file_lock);
 }
 
 /*

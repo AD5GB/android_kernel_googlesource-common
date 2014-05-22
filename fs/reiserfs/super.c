@@ -1449,6 +1449,7 @@ static int reiserfs_remount(struct super_block *s, int *mount_flags, char *arg)
 	err = journal_end(&th, s, 10);
 	if (err)
 		goto out_unlock;
+	s->s_dirt = 0;
 
 	if (!(*mount_flags & MS_RDONLY)) {
 		/*

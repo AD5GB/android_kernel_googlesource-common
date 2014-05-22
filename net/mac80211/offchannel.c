@@ -140,6 +140,12 @@ void ieee80211_offchannel_stop_vifs(struct ieee80211_local *local)
 			sdata->vif.bss_conf.enable_beacon = false;
 			ieee80211_bss_info_change_notify(
 				sdata, BSS_CHANGED_BEACON_ENABLED);
+
+		if (sdata->vif.type != NL80211_IFTYPE_MONITOR) {
+			netif_tx_stop_all_queues(sdata->dev);
+			if (sdata->vif.type == NL80211_IFTYPE_STATION &&
+			    sdata->u.mgd.associated)
+				ieee80211_offchannel_ps_enable(sdata, true);
 		}
 
 		if (sdata->vif.type == NL80211_IFTYPE_STATION &&
@@ -411,13 +417,28 @@ static void ieee80211_hw_roc_done(struct work_struct *work)
 	if (list_empty(&local->roc_list))
 		goto out_unlock;
 
-	roc = list_first_entry(&local->roc_list, struct ieee80211_roc_work,
-			       list);
+	/* was never transmitted */
+	if (local->hw_roc_skb) {
+		u64 cookie;
 
-	if (!roc->started)
-		goto out_unlock;
+		cookie = local->hw_roc_cookie ^ 2;
 
-	list_del(&roc->list);
+		cfg80211_mgmt_tx_status(local->hw_roc_dev, cookie,
+					local->hw_roc_skb->data,
+					local->hw_roc_skb->len, false,
+					GFP_KERNEL);
+
+		kfree_skb(local->hw_roc_skb);
+		local->hw_roc_skb = NULL;
+		local->hw_roc_skb_for_status = NULL;
+	}
+
+	if (!local->hw_roc_for_tx)
+		cfg80211_remain_on_channel_expired(local->hw_roc_dev,
+						   local->hw_roc_cookie,
+						   local->hw_roc_channel,
+						   local->hw_roc_channel_type,
+						   GFP_KERNEL);
 
 	ieee80211_roc_notify_destroy(roc, true);
 

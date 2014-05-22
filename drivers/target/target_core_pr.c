@@ -1975,7 +1975,7 @@ static int __core_scsi3_write_aptpl_to_file(
 	if (IS_ERR(file)) {
 		pr_err("filp_open(%s) for APTPL metadata"
 			" failed\n", path);
-		return PTR_ERR(file);
+		return IS_ERR(file) ? PTR_ERR(file) : -ENOENT;
 	}
 
 	if (!pr_aptpl_buf_len)
@@ -3675,15 +3675,20 @@ target_scsi3_emulate_pr_out(struct se_cmd *cmd)
 		pr_err("Received PERSISTENT_RESERVE CDB while legacy"
 			" SPC-2 reservation is held, returning"
 			" RESERVATION_CONFLICT\n");
-		return TCM_RESERVATION_CONFLICT;
+		cmd->scsi_sense_reason = TCM_RESERVATION_CONFLICT;
+		ret = -EINVAL;
+		goto out;
 	}
 
 	/*
 	 * FIXME: A NULL struct se_session pointer means an this is not coming from
 	 * a $FABRIC_MOD's nexus, but from internal passthrough ops.
 	 */
-	if (!cmd->se_sess)
-		return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
+	if (!cmd->se_sess) {
+		cmd->scsi_sense_reason = TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
+		ret = -EINVAL;
+		goto out;
+	}
 
 	if (cmd->data_length < 24) {
 		pr_warn("SPC-PR: Received PR OUT parameter list"

@@ -298,8 +298,8 @@ aoeblk_gdalloc(void *vp)
 		pr_err("aoe: cannot allocate block queue for %ld.%d\n",
 			d->aoemajor, d->aoeminor);
 		goto err_mempool;
-	}
-
+	blk_queue_make_request(d->blkq, aoeblk_make_request);
+	d->blkq->backing_dev_info.name = "aoe";
 	spin_lock_irqsave(&d->lock, flags);
 	WARN_ON(!(d->flags & DEVFL_GD_NOW));
 	WARN_ON(!(d->flags & DEVFL_GDALLOC));

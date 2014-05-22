@@ -221,9 +221,17 @@ register_slot(acpi_handle handle, u32 lvl, void *context, void **rv)
 	device = (adr >> 16) & 0xffff;
 	function = adr & 0xffff;
 
-	pdev = bridge->pci_dev;
-	if (pdev && device_is_managed_by_native_pciehp(pdev))
-		return AE_OK;
+	pdev = pbus->self;
+	if (pdev && pci_is_pcie(pdev)) {
+		tmp = acpi_find_root_bridge_handle(pdev);
+		if (tmp) {
+			struct acpi_pci_root *root = acpi_pci_find_root(tmp);
+
+			if (root && (root->osc_control_set &
+					OSC_PCI_EXPRESS_NATIVE_HP_CONTROL))
+				return AE_OK;
+		}
+	}
 
 	newfunc = kzalloc(sizeof(struct acpiphp_func), GFP_KERNEL);
 	if (!newfunc)

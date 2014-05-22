@@ -1029,7 +1029,7 @@ static void __init free_iommu_all(void)
  *     BIOS should disable L2B micellaneous clock gating by setting
  *     L2_L2B_CK_GATE_CONTROL[CKGateL2BMiscDisable](D0F2xF4_x90[2]) = 1b
  */
-static void amd_iommu_erratum_746_workaround(struct amd_iommu *iommu)
+static void __init amd_iommu_erratum_746_workaround(struct amd_iommu *iommu)
 {
 	u32 value;
 
@@ -1081,7 +1081,13 @@ static int __init init_iommu_one(struct amd_iommu *iommu, struct ivhd_header *h)
 	/*
 	 * Copy data from ACPI table entry to the iommu struct
 	 */
-	iommu->devid   = h->devid;
+	iommu->dev = pci_get_bus_and_slot(PCI_BUS(h->devid), h->devid & 0xff);
+	if (!iommu->dev)
+		return 1;
+
+	iommu->root_pdev = pci_get_bus_and_slot(iommu->dev->bus->number,
+						PCI_DEVFN(0, 0));
+
 	iommu->cap_ptr = h->cap_ptr;
 	iommu->pci_seg = h->pci_seg;
 	iommu->mmio_phys = h->mmio_phys;
@@ -1111,7 +1117,9 @@ static int __init init_iommu_one(struct amd_iommu *iommu, struct ivhd_header *h)
 
 	init_iommu_devices(iommu);
 
-	return 0;
+	amd_iommu_erratum_746_workaround(iommu);
+
+	return pci_enable_device(iommu->dev);
 }
 
 /*
@@ -1828,7 +1836,8 @@ static int __init early_amd_iommu_init(void)
 					    GFP_KERNEL | __GFP_ZERO,
 					    get_order(MAX_DOMAIN_ID/8));
 	if (amd_iommu_pd_alloc_bitmap == NULL)
-		goto out;
+		goto free;
+
 
 	/*
 	 * let all alias entries point to itself
@@ -1907,9 +1916,8 @@ out:
 
 static bool detect_ivrs(void)
 {
-	struct acpi_table_header *ivrs_base;
-	acpi_size ivrs_size;
-	acpi_status status;
+	struct amd_iommu *iommu;
+	int ret = 0;
 
 	status = acpi_get_table_with_size("IVRS", 0, &ivrs_base, &ivrs_size);
 	if (status == AE_NOT_FOUND)
@@ -1949,9 +1957,18 @@ static int amd_iommu_init_dma(void)
 	for_each_iommu(iommu)
 		iommu_flush_all_caches(iommu);
 
+	/* init the device table */
+	init_device_table();
+
+	for_each_iommu(iommu)
+		iommu_flush_all_caches(iommu);
+
 	amd_iommu_init_api();
 
-	amd_iommu_init_notifier();
+	x86_platform.iommu_shutdown = disable_iommus;
+
+	if (iommu_pass_through)
+		goto out;
 
 	return 0;
 }
@@ -1962,58 +1979,7 @@ static int amd_iommu_init_dma(void)
  *
  ****************************************************************************/
 
-static int __init state_next(void)
-{
-	int ret = 0;
-
-	switch (init_state) {
-	case IOMMU_START_STATE:
-		if (!detect_ivrs()) {
-			init_state	= IOMMU_NOT_FOUND;
-			ret		= -ENODEV;
-		} else {
-			init_state	= IOMMU_IVRS_DETECTED;
-		}
-		break;
-	case IOMMU_IVRS_DETECTED:
-		ret = early_amd_iommu_init();
-		init_state = ret ? IOMMU_INIT_ERROR : IOMMU_ACPI_FINISHED;
-		break;
-	case IOMMU_ACPI_FINISHED:
-		early_enable_iommus();
-		register_syscore_ops(&amd_iommu_syscore_ops);
-		x86_platform.iommu_shutdown = disable_iommus;
-		init_state = IOMMU_ENABLED;
-		break;
-	case IOMMU_ENABLED:
-		ret = amd_iommu_init_pci();
-		init_state = ret ? IOMMU_INIT_ERROR : IOMMU_PCI_INIT;
-		enable_iommus_v2();
-		break;
-	case IOMMU_PCI_INIT:
-		ret = amd_iommu_enable_interrupts();
-		init_state = ret ? IOMMU_INIT_ERROR : IOMMU_INTERRUPTS_EN;
-		break;
-	case IOMMU_INTERRUPTS_EN:
-		ret = amd_iommu_init_dma();
-		init_state = ret ? IOMMU_INIT_ERROR : IOMMU_DMA_OPS;
-		break;
-	case IOMMU_DMA_OPS:
-		init_state = IOMMU_INITIALIZED;
-		break;
-	case IOMMU_INITIALIZED:
-		/* Nothing to do */
-		break;
-	case IOMMU_NOT_FOUND:
-	case IOMMU_INIT_ERROR:
-		/* Error states => do nothing */
-		ret = -EINVAL;
-		break;
-	default:
-		/* Unknown state */
-		BUG();
-	}
-
+out:
 	return ret;
 }
 

@@ -346,7 +346,87 @@ drop:
 
 static struct sk_buff *handle_offloads(struct ip_tunnel *tunnel, struct sk_buff *skb)
 {
-	int err;
+	struct ip_tunnel *tunnel = netdev_priv(dev);
+	struct pcpu_tstats *tstats;
+	const struct iphdr  *old_iph = ip_hdr(skb);
+	const struct iphdr  *tiph;
+	struct flowi4 fl4;
+	u8     tos;
+	__be16 df;
+	struct rtable *rt;     			/* Route to the other host */
+	struct net_device *tdev;		/* Device to other host */
+	struct iphdr  *iph;			/* Our new IP header */
+	unsigned int max_headroom;		/* The extra header space needed */
+	int    gre_hlen;
+	__be32 dst;
+	int    mtu;
+
+	if (dev->type == ARPHRD_ETHER)
+		IPCB(skb)->flags = 0;
+
+	if (dev->header_ops && dev->type == ARPHRD_IPGRE) {
+		gre_hlen = 0;
+		tiph = (const struct iphdr *)skb->data;
+	} else {
+		gre_hlen = tunnel->hlen;
+		tiph = &tunnel->parms.iph;
+	}
+
+	memset(&(IPCB(skb)->opt), 0, sizeof(IPCB(skb)->opt));
+	if ((dst = tiph->daddr) == 0) {
+		/* NBMA tunnel */
+
+		if (skb_dst(skb) == NULL) {
+			dev->stats.tx_fifo_errors++;
+			goto tx_error;
+		}
+
+		if (skb->protocol == htons(ETH_P_IP)) {
+			rt = skb_rtable(skb);
+			dst = rt->rt_gateway;
+		}
+#if IS_ENABLED(CONFIG_IPV6)
+		else if (skb->protocol == htons(ETH_P_IPV6)) {
+			const struct in6_addr *addr6;
+			struct neighbour *neigh;
+			bool do_tx_error_icmp;
+			int addr_type;
+
+			neigh = dst_neigh_lookup(skb_dst(skb), &ipv6_hdr(skb)->daddr);
+			if (neigh == NULL)
+				goto tx_error;
+
+			addr6 = (const struct in6_addr *)&neigh->primary_key;
+			addr_type = ipv6_addr_type(addr6);
+
+			if (addr_type == IPV6_ADDR_ANY) {
+				addr6 = &ipv6_hdr(skb)->daddr;
+				addr_type = ipv6_addr_type(addr6);
+			}
+
+			if ((addr_type & IPV6_ADDR_COMPATv4) == 0)
+				do_tx_error_icmp = true;
+			else {
+				do_tx_error_icmp = false;
+				dst = addr6->s6_addr32[3];
+			}
+			neigh_release(neigh);
+			if (do_tx_error_icmp)
+				goto tx_error_icmp;
+		}
+#endif
+		else
+			goto tx_error;
+	}
+
+	tos = tiph->tos;
+	if (tos == 1) {
+		tos = 0;
+		if (skb->protocol == htons(ETH_P_IP))
+			tos = old_iph->tos;
+		else if (skb->protocol == htons(ETH_P_IPV6))
+			tos = ipv6_get_dsfield((const struct ipv6hdr *)old_iph);
+	}
 
 	if (skb_is_gso(skb)) {
 		err = skb_unclone(skb, GFP_ATOMIC);
@@ -429,8 +509,17 @@ static void __gre_xmit(struct sk_buff *skb, struct net_device *dev,
 		return;
 	}
 
-	ip_tunnel_xmit(skb, dev, tnl_params);
-}
+	skb_reset_transport_header(skb);
+	skb_push(skb, gre_hlen);
+	skb_reset_network_header(skb);
+	IPCB(skb)->flags &= ~(IPSKB_XFRM_TUNNEL_SIZE | IPSKB_XFRM_TRANSFORMED |
+			      IPSKB_REROUTED);
+	skb_dst_drop(skb);
+	skb_dst_set(skb, &rt->dst);
+
+	/*
+	 *	Push down and install the IPIP header.
+	 */
 
 static netdev_tx_t ipgre_xmit(struct sk_buff *skb,
 			      struct net_device *dev)

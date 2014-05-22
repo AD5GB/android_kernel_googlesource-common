@@ -968,6 +968,16 @@ static void nfsd4_del_conns(struct nfsd4_session *s)
 
 static void __free_session(struct nfsd4_session *ses)
 {
+	struct nfsd4_session *ses;
+	int mem;
+
+	lockdep_assert_held(&client_lock);
+	ses = container_of(kref, struct nfsd4_session, se_ref);
+	nfsd4_del_conns(ses);
+	spin_lock(&nfsd_drc_lock);
+	mem = ses->se_fchannel.maxreqs * slot_bytes(&ses->se_fchannel);
+	nfsd_drc_mem_used -= mem;
+	spin_unlock(&nfsd_drc_lock);
 	free_session_slots(ses);
 	kfree(ses);
 }
@@ -1087,9 +1097,7 @@ static struct nfs4_client *alloc_client(struct xdr_netobj name)
 static inline void
 free_client(struct nfs4_client *clp)
 {
-	struct nfsd_net __maybe_unused *nn = net_generic(clp->net, nfsd_net_id);
-
-	lockdep_assert_held(&nn->client_lock);
+	lockdep_assert_held(&client_lock);
 	while (!list_empty(&clp->cl_sessions)) {
 		struct nfsd4_session *ses;
 		ses = list_entry(clp->cl_sessions.next, struct nfsd4_session,
@@ -1100,6 +1108,7 @@ free_client(struct nfs4_client *clp)
 	}
 	free_svc_cred(&clp->cl_cred);
 	kfree(clp->cl_name.data);
+	idr_remove_all(&clp->cl_stateids);
 	idr_destroy(&clp->cl_stateids);
 	kfree(clp);
 }
@@ -3900,6 +3909,8 @@ nfsd4_close(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	memcpy(&close->cl_stateid, &stp->st_stid.sc_stateid, sizeof(stateid_t));
 
 	nfsd4_close_open_stateid(stp);
+	release_last_closed_stateid(oo);
+	oo->oo_last_closed_stid = stp;
 
 	if (cstate->minorversion) {
 		unhash_stid(&stp->st_stid);

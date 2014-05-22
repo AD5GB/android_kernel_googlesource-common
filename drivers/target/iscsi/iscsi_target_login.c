@@ -43,35 +43,6 @@
 
 static struct iscsi_login *iscsi_login_init_conn(struct iscsi_conn *conn)
 {
-	struct iscsi_login *login;
-
-	login = kzalloc(sizeof(struct iscsi_login), GFP_KERNEL);
-	if (!login) {
-		pr_err("Unable to allocate memory for struct iscsi_login.\n");
-		return NULL;
-	}
-	login->conn = conn;
-	login->first_request = 1;
-
-	login->req_buf = kzalloc(MAX_KEY_VALUE_PAIRS, GFP_KERNEL);
-	if (!login->req_buf) {
-		pr_err("Unable to allocate memory for response buffer.\n");
-		goto out_login;
-	}
-
-	login->rsp_buf = kzalloc(MAX_KEY_VALUE_PAIRS, GFP_KERNEL);
-	if (!login->rsp_buf) {
-		pr_err("Unable to allocate memory for request buffer.\n");
-		goto out_req_buf;
-	}
-
-	conn->conn_ops = kzalloc(sizeof(struct iscsi_conn_ops), GFP_KERNEL);
-	if (!conn->conn_ops) {
-		pr_err("Unable to allocate memory for"
-			" struct iscsi_conn_ops.\n");
-		goto out_rsp_buf;
-	}
-
 	init_waitqueue_head(&conn->queues_wq);
 	INIT_LIST_HEAD(&conn->conn_list);
 	INIT_LIST_HEAD(&conn->conn_cmd_list);
@@ -966,166 +937,17 @@ fail:
 	return ret;
 }
 
-int iscsi_target_setup_login_socket(
-	struct iscsi_np *np,
-	struct __kernel_sockaddr_storage *sockaddr)
-{
-	struct iscsit_transport *t;
-	int rc;
-
-	t = iscsit_get_transport(np->np_network_transport);
-	if (!t)
-		return -EINVAL;
-
-	rc = t->iscsit_setup_np(np, sockaddr);
-	if (rc < 0) {
-		iscsit_put_transport(t);
-		return rc;
-	}
-
-	np->np_transport = t;
-	return 0;
-}
-
-int iscsit_accept_np(struct iscsi_np *np, struct iscsi_conn *conn)
-{
-	struct socket *new_sock, *sock = np->np_socket;
-	struct sockaddr_in sock_in;
-	struct sockaddr_in6 sock_in6;
-	int rc, err;
-
-	rc = kernel_accept(sock, &new_sock, 0);
-	if (rc < 0)
-		return rc;
-
-	conn->sock = new_sock;
-	conn->login_family = np->np_sockaddr.ss_family;
-
-	if (np->np_sockaddr.ss_family == AF_INET6) {
-		memset(&sock_in6, 0, sizeof(struct sockaddr_in6));
-
-		rc = conn->sock->ops->getname(conn->sock,
-				(struct sockaddr *)&sock_in6, &err, 1);
-		if (!rc) {
-			snprintf(conn->login_ip, sizeof(conn->login_ip), "%pI6c",
-				&sock_in6.sin6_addr.in6_u);
-			conn->login_port = ntohs(sock_in6.sin6_port);
-		}
-
-		rc = conn->sock->ops->getname(conn->sock,
-				(struct sockaddr *)&sock_in6, &err, 0);
-		if (!rc) {
-			snprintf(conn->local_ip, sizeof(conn->local_ip), "%pI6c",
-				&sock_in6.sin6_addr.in6_u);
-			conn->local_port = ntohs(sock_in6.sin6_port);
-		}
-	} else {
-		memset(&sock_in, 0, sizeof(struct sockaddr_in));
-
-		rc = conn->sock->ops->getname(conn->sock,
-				(struct sockaddr *)&sock_in, &err, 1);
-		if (!rc) {
-			sprintf(conn->login_ip, "%pI4",
-					&sock_in.sin_addr.s_addr);
-			conn->login_port = ntohs(sock_in.sin_port);
-		}
-
-		rc = conn->sock->ops->getname(conn->sock,
-				(struct sockaddr *)&sock_in, &err, 0);
-		if (!rc) {
-			sprintf(conn->local_ip, "%pI4",
-					&sock_in.sin_addr.s_addr);
-			conn->local_port = ntohs(sock_in.sin_port);
-		}
-	}
-
-	return 0;
-}
-
-int iscsit_get_login_rx(struct iscsi_conn *conn, struct iscsi_login *login)
-{
-	struct iscsi_login_req *login_req;
-	u32 padding = 0, payload_length;
-
-	if (iscsi_login_rx_data(conn, login->req, ISCSI_HDR_LEN) < 0)
-		return -1;
-
-	login_req = (struct iscsi_login_req *)login->req;
-	payload_length	= ntoh24(login_req->dlength);
-	padding = ((-payload_length) & 3);
-
-	pr_debug("Got Login Command, Flags 0x%02x, ITT: 0x%08x,"
-		" CmdSN: 0x%08x, ExpStatSN: 0x%08x, CID: %hu, Length: %u\n",
-		login_req->flags, login_req->itt, login_req->cmdsn,
-		login_req->exp_statsn, login_req->cid, payload_length);
-	/*
-	 * Setup the initial iscsi_login values from the leading
-	 * login request PDU.
-	 */
-	if (login->first_request) {
-		login_req = (struct iscsi_login_req *)login->req;
-		login->leading_connection = (!login_req->tsih) ? 1 : 0;
-		login->current_stage	= ISCSI_LOGIN_CURRENT_STAGE(login_req->flags);
-		login->version_min	= login_req->min_version;
-		login->version_max	= login_req->max_version;
-		memcpy(login->isid, login_req->isid, 6);
-		login->cmd_sn		= be32_to_cpu(login_req->cmdsn);
-		login->init_task_tag	= login_req->itt;
-		login->initial_exp_statsn = be32_to_cpu(login_req->exp_statsn);
-		login->cid		= be16_to_cpu(login_req->cid);
-		login->tsih		= be16_to_cpu(login_req->tsih);
-	}
-
-	if (iscsi_target_check_login_request(conn, login) < 0)
-		return -1;
-
-	memset(login->req_buf, 0, MAX_KEY_VALUE_PAIRS);
-	if (iscsi_login_rx_data(conn, login->req_buf,
-				payload_length + padding) < 0)
-		return -1;
-
-	return 0;
-}
-
-int iscsit_put_login_tx(struct iscsi_conn *conn, struct iscsi_login *login,
-			u32 length)
-{
-	if (iscsi_login_tx_data(conn, login->rsp, login->rsp_buf, length) < 0)
-		return -1;
-
-	return 0;
-}
-
-static int
-iscsit_conn_set_transport(struct iscsi_conn *conn, struct iscsit_transport *t)
-{
-	int rc;
-
-	if (!t->owner) {
-		conn->conn_transport = t;
-		return 0;
-	}
-
-	rc = try_module_get(t->owner);
-	if (!rc) {
-		pr_err("try_module_get() failed for %s\n", t->name);
-		return -EINVAL;
-	}
-
-	conn->conn_transport = t;
-	return 0;
-}
-
 static int __iscsi_target_login_thread(struct iscsi_np *np)
 {
-	u8 *buffer, zero_tsih = 0;
-	int ret = 0, rc, stop;
+	u8 buffer[ISCSI_HDR_LEN], iscsi_opcode, zero_tsih = 0;
+	int err, ret = 0, stop;
 	struct iscsi_conn *conn = NULL;
 	struct iscsi_login *login;
 	struct iscsi_portal_group *tpg = NULL;
 	struct iscsi_login_req *pdu;
 
 	flush_signals(current);
+	sock = np->np_socket;
 
 	spin_lock_bh(&np->np_thread_lock);
 	if (np->np_thread_state == ISCSI_NP_THREAD_RESET) {
@@ -1178,15 +1000,20 @@ static int __iscsi_target_login_thread(struct iscsi_np *np)
 		conn = NULL;
 		goto out;
 	}
-	/*
-	 * Perform the remaining iSCSI connection initialization items..
-	 */
-	login = iscsi_login_init_conn(conn);
-	if (!login) {
-		goto new_sess_out;
+	iscsi_start_login_thread_timer(np);
+
+	conn = kzalloc(sizeof(struct iscsi_conn), GFP_KERNEL);
+	if (!conn) {
+		pr_err("Could not allocate memory for"
+			" new connection\n");
+		sock_release(new_sock);
+		/* Get another socket */
+		return 1;
 	}
 
-	iscsi_start_login_thread_timer(np);
+	pr_debug("Moving to TARG_CONN_STATE_FREE.\n");
+	conn->conn_state = TARG_CONN_STATE_FREE;
+	conn->sock = new_sock;
 
 	pr_debug("Moving to TARG_CONN_STATE_XPT_UP.\n");
 	conn->conn_state = TARG_CONN_STATE_XPT_UP;
@@ -1354,18 +1181,8 @@ old_sess_out:
 		iscsi_release_param_list(conn->param_list);
 		conn->param_list = NULL;
 	}
-	iscsi_target_nego_release(conn);
-
-	if (conn->sock) {
+	if (conn->sock)
 		sock_release(conn->sock);
-		conn->sock = NULL;
-	}
-
-	if (conn->conn_transport->iscsit_free_conn)
-		conn->conn_transport->iscsit_free_conn(conn);
-
-	iscsit_put_transport(conn->conn_transport);
-
 	kfree(conn);
 
 	if (tpg) {

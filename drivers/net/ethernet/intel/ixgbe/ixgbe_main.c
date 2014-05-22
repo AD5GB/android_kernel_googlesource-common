@@ -1675,6 +1675,11 @@ static bool ixgbe_cleanup_headers(struct ixgbe_ring *rx_ring,
 	if (ixgbe_rx_is_fcoe(rx_ring, rx_desc))
 		return false;
 
+#ifdef IXGBE_FCOE
+	/* do not attempt to pad FCoE Frames as this will disrupt DDP */
+	if (ixgbe_rx_is_fcoe(rx_ring, rx_desc))
+		return false;
+
 #endif
 	/* if skb_pad returns an error the skb was freed */
 	if (unlikely(skb->len < 60)) {
@@ -7555,6 +7560,12 @@ skip_sriov:
 						pdev->subsystem_device);
 	if (hw->wol_enabled)
 		adapter->wol = IXGBE_WUFC_MAG;
+		break;
+	case IXGBE_DEV_ID_X540T:
+	case IXGBE_DEV_ID_X540T1:
+		/* Check eeprom to see if it is enabled */
+		hw->eeprom.ops.read(hw, 0x2c, &adapter->eeprom_cap);
+		wol_cap = adapter->eeprom_cap & IXGBE_DEVICE_CAPS_WOL_MASK;
 
 	device_set_wakeup_enable(&adapter->pdev->dev, adapter->wol);
 

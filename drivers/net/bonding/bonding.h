@@ -18,6 +18,7 @@
 #include <linux/timer.h>
 #include <linux/proc_fs.h>
 #include <linux/if_bonding.h>
+#include <linux/etherdevice.h>
 #include <linux/cpumask.h>
 #include <linux/in6.h>
 #include <linux/netpoll.h>
@@ -459,7 +460,7 @@ static inline struct slave *bond_slave_has_mac(struct bonding *bond,
 	struct slave *tmp;
 
 	bond_for_each_slave(bond, tmp, i)
-		if (ether_addr_equal_64bits(mac, tmp->dev->dev_addr))
+		if (!compare_ether_addr_64bits(mac, tmp->dev->dev_addr))
 			return tmp;
 
 	return NULL;

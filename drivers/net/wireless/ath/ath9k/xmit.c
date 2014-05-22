@@ -295,6 +295,7 @@ static struct ath_buf *ath_tx_get_buffer(struct ath_softc *sc)
 	}
 
 	bf = list_first_entry(&sc->tx.txbuf, struct ath_buf, list);
+	bf->bf_next = NULL;
 	list_del(&bf->list);
 
 	spin_unlock_bh(&sc->tx.txbuflock);
@@ -989,7 +990,7 @@ static void ath_buf_set_rate(struct ath_softc *sc, struct ath_buf *bf,
 	info->dur_update = !ieee80211_is_pspoll(hdr->frame_control);
 	info->rtscts_rate = fi->rtscts_rate;
 
-	for (i = 0; i < ARRAY_SIZE(bf->rates); i++) {
+	for (i = 0; i < 4; i++) {
 		bool is_40, is_sgi, is_sp;
 		int phy;
 
@@ -1869,6 +1870,50 @@ static struct ath_buf *ath_tx_setup_buffer(struct ath_softc *sc,
 	return bf;
 }
 
+/* FIXME: tx power */
+static void ath_tx_start_dma(struct ath_softc *sc, struct sk_buff *skb,
+			     struct ath_tx_control *txctl)
+{
+	struct ieee80211_tx_info *tx_info = IEEE80211_SKB_CB(skb);
+	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+	struct ath_atx_tid *tid = NULL;
+	struct ath_buf *bf;
+	u8 tidno;
+
+	if ((sc->sc_ah->caps.hw_caps & ATH9K_HW_CAP_HT) && txctl->an &&
+		ieee80211_is_data_qos(hdr->frame_control)) {
+		tidno = ieee80211_get_qos_ctl(hdr)[0] &
+			IEEE80211_QOS_CTL_TID_MASK;
+		tid = ATH_AN_2_TID(txctl->an, tidno);
+
+		WARN_ON(tid->ac->txq != txctl->txq);
+	}
+
+	if ((tx_info->flags & IEEE80211_TX_CTL_AMPDU) && tid) {
+		/*
+		 * Try aggregation if it's a unicast data frame
+		 * and the destination is HT capable.
+		 */
+		ath_tx_send_ampdu(sc, tid, skb, txctl);
+	} else {
+		bf = ath_tx_setup_buffer(sc, txctl->txq, tid, skb);
+		if (!bf) {
+			if (txctl->paprd)
+				dev_kfree_skb_any(skb);
+			else
+				ieee80211_free_txskb(sc->hw, skb);
+			return;
+		}
+
+		bf->bf_state.bfs_paprd = txctl->paprd;
+
+		if (txctl->paprd)
+			bf->bf_state.bfs_paprd_timestamp = jiffies;
+
+		ath_tx_send_normal(sc, txctl->txq, tid, skb);
+	}
+}
+
 /* Upon failure caller should free skb */
 int ath_tx_start(struct ieee80211_hw *hw, struct sk_buff *skb,
 		 struct ath_tx_control *txctl)
@@ -2387,6 +2432,7 @@ void ath_tx_node_init(struct ath_softc *sc, struct ath_node *an)
 	for (acno = 0, ac = &an->ac[acno];
 	     acno < IEEE80211_NUM_ACS; acno++, ac++) {
 		ac->sched    = false;
+		ac->clear_ps_filter = true;
 		ac->txq = sc->tx.txq_map[acno];
 		INIT_LIST_HEAD(&ac->tid_q);
 	}

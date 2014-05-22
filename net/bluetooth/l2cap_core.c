@@ -1392,11 +1392,6 @@ static void l2cap_conn_ready(struct l2cap_conn *conn)
 
 		l2cap_chan_lock(chan);
 
-		if (chan->chan_type == L2CAP_CHAN_CONN_FIX_A2MP) {
-			l2cap_chan_unlock(chan);
-			continue;
-		}
-
 		if (hcon->type == LE_LINK) {
 			if (smp_conn_security(hcon, chan->sec_level))
 				l2cap_chan_ready(chan);
@@ -1793,11 +1788,11 @@ int l2cap_chan_connect(struct l2cap_chan *chan, __le16 psm, u16 cid,
 	auth_type = l2cap_get_auth_type(chan);
 
 	if (chan->dcid == L2CAP_CID_LE_DATA)
-		hcon = hci_connect(hdev, LE_LINK, 0, dst, dst_type,
-				   chan->sec_level, auth_type);
+		hcon = hci_connect(hdev, LE_LINK, 0, dst,
+					chan->sec_level, auth_type);
 	else
-		hcon = hci_connect(hdev, ACL_LINK, 0, dst, dst_type,
-				   chan->sec_level, auth_type);
+		hcon = hci_connect(hdev, ACL_LINK, 0, dst,
+					chan->sec_level, auth_type);
 
 	if (IS_ERR(hcon)) {
 		err = PTR_ERR(hcon);
@@ -2855,6 +2850,9 @@ static struct sk_buff *l2cap_build_cmd(struct l2cap_conn *conn, u8 code,
 	if (conn->mtu < L2CAP_HDR_SIZE + L2CAP_CMD_HDR_SIZE)
 		return NULL;
 
+	if (conn->mtu < L2CAP_HDR_SIZE + L2CAP_CMD_HDR_SIZE)
+		return NULL;
+
 	len = L2CAP_HDR_SIZE + L2CAP_CMD_HDR_SIZE + dlen;
 	count = min_t(unsigned int, conn->mtu, len);
 
@@ -3652,15 +3650,14 @@ static void l2cap_conf_rfc_get(struct l2cap_chan *chan, void *rsp, int len)
 	while (len >= L2CAP_CONF_OPT_SIZE) {
 		len -= l2cap_get_conf_opt(&rsp, &type, &olen, &val);
 
-		switch (type) {
-		case L2CAP_CONF_RFC:
-			if (olen == sizeof(rfc))
-				memcpy(&rfc, (void *)val, olen);
+		if (type != L2CAP_CONF_RFC)
+			continue;
+
+		if (olen != sizeof(rfc))
 			break;
-		case L2CAP_CONF_EWS:
-			txwin_ext = val;
-			break;
-		}
+
+		memcpy(&rfc, (void *)val, olen);
+		goto done;
 	}
 
 	switch (rfc.mode) {

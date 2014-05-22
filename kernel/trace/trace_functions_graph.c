@@ -49,8 +49,6 @@ struct fgraph_data {
 #define TRACE_GRAPH_PRINT_FLAT		0x80
 
 
-static unsigned int max_depth;
-
 static struct tracer_opt trace_opts[] = {
 	/* Display overruns? (for self-debug purpose) */
 	{ TRACER_OPT(funcgraph-overrun, TRACE_GRAPH_PRINT_OVERRUN) },
@@ -1464,55 +1462,6 @@ graph_depth_write(struct file *filp, const char __user *ubuf, size_t cnt,
 {
 	unsigned long val;
 	int ret;
-
-	ret = kstrtoul_from_user(ubuf, cnt, 10, &val);
-	if (ret)
-		return ret;
-
-	max_depth = val;
-
-	*ppos += cnt;
-
-	return cnt;
-}
-
-static ssize_t
-graph_depth_read(struct file *filp, char __user *ubuf, size_t cnt,
-		 loff_t *ppos)
-{
-	char buf[15]; /* More than enough to hold UINT_MAX + "\n"*/
-	int n;
-
-	n = sprintf(buf, "%d\n", max_depth);
-
-	return simple_read_from_buffer(ubuf, cnt, ppos, buf, n);
-}
-
-static const struct file_operations graph_depth_fops = {
-	.open		= tracing_open_generic,
-	.write		= graph_depth_write,
-	.read		= graph_depth_read,
-	.llseek		= generic_file_llseek,
-};
-
-static __init int init_graph_debugfs(void)
-{
-	struct dentry *d_tracer;
-
-	d_tracer = tracing_init_dentry();
-	if (!d_tracer)
-		return 0;
-
-	trace_create_file("max_graph_depth", 0644, d_tracer,
-			  NULL, &graph_depth_fops);
-
-	return 0;
-}
-fs_initcall(init_graph_debugfs);
-
-static __init int init_graph_trace(void)
-{
-	max_bytes_for_cpu = snprintf(NULL, 0, "%d", nr_cpu_ids - 1);
 
 	return register_tracer(&graph_trace);
 }

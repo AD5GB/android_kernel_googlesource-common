@@ -415,7 +415,7 @@ static void handle_tx(struct vhost_net *net)
 				ubufs = NULL;
 			} else {
 				struct ubuf_info *ubuf;
-				ubuf = nvq->ubuf_info + nvq->upend_idx;
+				ubuf = vq->ubuf_info + vq->upend_idx;
 
 				vq->heads[nvq->upend_idx].len =
 					VHOST_DMA_IN_PROGRESS;

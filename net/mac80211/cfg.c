@@ -175,7 +175,7 @@ static int ieee80211_add_key(struct wiphy *wiphy, struct net_device *dev,
 		 *       add it to the device after the station.
 		 */
 		if (!sta || !test_sta_flag(sta, WLAN_STA_ASSOC)) {
-			ieee80211_key_free_unused(key);
+			ieee80211_key_free(sdata->local, key);
 			err = -ENOENT;
 			goto out_unlock;
 		}

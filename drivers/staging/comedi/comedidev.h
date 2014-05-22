@@ -228,10 +228,12 @@ struct comedi_device {
 	void (*close) (struct comedi_device *dev);
 };
 
-static inline const void *comedi_board(const struct comedi_device *dev)
-{
-	return dev->board_ptr;
-}
+struct comedi_device_file_info {
+	struct comedi_device *device;
+	struct comedi_subdevice *read_subdevice;
+	struct comedi_subdevice *write_subdevice;
+	struct device *hardware_device;
+};
 
 #ifdef CONFIG_COMEDI_DEBUG
 extern int comedi_debug;

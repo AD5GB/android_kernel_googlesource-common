@@ -276,12 +276,28 @@ void build_ehash_secret(void)
 		get_random_bytes(&rnd, sizeof(rnd));
 	} while (rnd == 0);
 
-	if (cmpxchg(&inet_ehash_secret, 0, rnd) == 0) {
+	if (cmpxchg(&inet_ehash_secret, 0, rnd) == 0)
 		get_random_bytes(&ipv6_hash_secret, sizeof(ipv6_hash_secret));
-		net_secret_init();
-	}
 }
 EXPORT_SYMBOL(build_ehash_secret);
+
+static inline int inet_netns_ok(struct net *net, int protocol)
+{
+	int hash;
+	const struct net_protocol *ipprot;
+
+	if (net_eq(net, &init_net))
+		return 1;
+
+	hash = protocol & (MAX_INET_PROTOS - 1);
+	ipprot = rcu_dereference(inet_protos[hash]);
+
+	if (ipprot == NULL)
+		/* raw IP is OK */
+		return 1;
+	return ipprot->netns_ok;
+}
+
 
 /*
  *	Create an inet socket.
@@ -1598,7 +1614,7 @@ static const struct net_offload udp_offload = {
 
 static const struct net_protocol icmp_protocol = {
 	.handler =	icmp_rcv,
-	.err_handler =	icmp_err,
+	.err_handler =	ping_v4_err,
 	.no_policy =	1,
 	.netns_ok =	1,
 };

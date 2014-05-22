@@ -287,6 +287,9 @@ xen_running_on_version_or_later(unsigned int major, unsigned int minor)
 #define CPUID_THERM_POWER_LEAF 6
 #define APERFMPERF_PRESENT 0
 
+#define CPUID_THERM_POWER_LEAF 6
+#define APERFMPERF_PRESENT 0
+
 static __read_mostly unsigned int cpuid_leaf1_edx_mask = ~0;
 static __read_mostly unsigned int cpuid_leaf1_ecx_mask = ~0;
 
@@ -1240,7 +1243,9 @@ static const struct pv_cpu_ops xen_cpu_ops __initconst = {
 	.wbinvd = native_wbinvd,
 
 	.read_msr = native_read_msr_safe,
+	.rdmsr_regs = native_rdmsr_safe_regs,
 	.write_msr = xen_write_msr_safe,
+	.wrmsr_regs = native_wrmsr_safe_regs,
 
 	.read_tsc = native_read_tsc,
 	.read_pmc = native_read_pmc,
@@ -1520,6 +1525,8 @@ asmlinkage void __init xen_start_kernel(void)
 	 */
 	pat_enabled = 0;
 #endif
+	pgd = (pgd_t *)xen_start_info->pt_base;
+
 	/* Don't do the full vcpu_info placement stuff until we have a
 	   possible map and a non-dummy shared_info. */
 	per_cpu(xen_vcpu, 0) = &HYPERVISOR_shared_info->vcpu_info[0];

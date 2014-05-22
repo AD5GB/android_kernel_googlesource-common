@@ -5,8 +5,6 @@
 #include <linux/capability.h>
 #include <linux/skbuff.h>
 #include <linux/export.h>
-#include <net/scm.h>
-#include <uapi/linux/netlink.h>
 
 struct net;
 
@@ -140,6 +138,14 @@ static inline int netlink_dump_start(struct sock *ssk, struct sk_buff *skb,
 {
 	if (!control->module)
 		control->module = THIS_MODULE;
+
+	return __netlink_dump_start(ssk, skb, nlh, control);
+}
+
+
+#define NL_NONROOT_RECV 0x1
+#define NL_NONROOT_SEND 0x2
+extern void netlink_set_nonroot(int protocol, unsigned flag);
 
 	return __netlink_dump_start(ssk, skb, nlh, control);
 }

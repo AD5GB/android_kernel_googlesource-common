@@ -1138,7 +1138,7 @@ int ieee80211_ibss_leave(struct ieee80211_sub_if_data *sdata)
 	memset(ifibss->bssid, 0, ETH_ALEN);
 	ifibss->ssid_len = 0;
 
-	sta_info_flush(sdata);
+	sta_info_flush(sdata->local, sdata);
 
 	spin_lock_bh(&ifibss->incomplete_lock);
 	while (!list_empty(&ifibss->incomplete_stations)) {

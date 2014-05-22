@@ -38,8 +38,6 @@ struct gpio_vbus_data {
 	int			vbus_draw_enabled;
 	unsigned		mA;
 	struct delayed_work	work;
-	int			vbus;
-	int			irq;
 };
 
 

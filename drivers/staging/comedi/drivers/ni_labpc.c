@@ -910,6 +910,20 @@ static int labpc_ai_cmd(struct comedi_device *dev, struct comedi_subdevice *s)
 	labpc_setup_cmd6_reg(dev, s, mode, xfer, range, aref,
 			     (cmd->stop_src == TRIG_EXT));
 
+	/* setup channel list, etc (command1 register) */
+	devpriv->command1_bits = 0;
+	if (labpc_ai_scan_mode(cmd) == MODE_MULT_CHAN_UP)
+		channel = CR_CHAN(cmd->chanlist[cmd->chanlist_len - 1]);
+	else
+		channel = CR_CHAN(cmd->chanlist[0]);
+	/* munge channel bits for differential / scan disabled mode */
+	if ((labpc_ai_scan_mode(cmd) == MODE_SINGLE_CHAN ||
+	     labpc_ai_scan_mode(cmd) == MODE_SINGLE_CHAN_INTERVAL) &&
+	    aref == AREF_DIFF)
+		channel *= 2;
+	devpriv->command1_bits |= ADC_CHAN_BITS(channel);
+	devpriv->command1_bits |= thisboard->ai_range_code[range];
+	devpriv->write_byte(devpriv->command1_bits, dev->iobase + COMMAND1_REG);
 	/* manual says to set scan enable bit on second pass */
 	if (mode == MODE_MULT_CHAN_UP || mode == MODE_MULT_CHAN_DOWN) {
 		devpriv->cmd1 |= CMD1_SCANEN;
@@ -917,7 +931,8 @@ static int labpc_ai_cmd(struct comedi_device *dev, struct comedi_subdevice *s)
 		 * list will get screwed when you switch
 		 * between scan up to scan down mode - dunno why */
 		udelay(1);
-		devpriv->write_byte(devpriv->cmd1, dev->iobase + CMD1_REG);
+		devpriv->write_byte(devpriv->command1_bits,
+				    dev->iobase + COMMAND1_REG);
 	}
 
 	devpriv->write_byte(cmd->chanlist_len,
@@ -1017,6 +1032,22 @@ static int labpc_ai_cmd(struct comedi_device *dev, struct comedi_subdevice *s)
 	if (aref == AREF_DIFF)
 		devpriv->cmd4 |= CMD4_SEDIFF;
 	devpriv->write_byte(devpriv->cmd4, dev->iobase + CMD4_REG);
+
+	/*  setup any external triggering/pacing (command4 register) */
+	devpriv->command4_bits = 0;
+	if (cmd->convert_src != TRIG_EXT)
+		devpriv->command4_bits |= EXT_CONVERT_DISABLE_BIT;
+	/* XXX should discard first scan when using interval scanning
+	 * since manual says it is not synced with scan clock */
+	if (labpc_use_continuous_mode(cmd) == 0) {
+		devpriv->command4_bits |= INTERVAL_SCAN_EN_BIT;
+		if (cmd->scan_begin_src == TRIG_EXT)
+			devpriv->command4_bits |= EXT_SCAN_EN_BIT;
+	}
+	/*  single-ended/differential */
+	if (aref == AREF_DIFF)
+		devpriv->command4_bits |= ADC_DIFF_BIT;
+	devpriv->write_byte(devpriv->command4_bits, dev->iobase + COMMAND4_REG);
 
 	/*  startup acquisition */
 

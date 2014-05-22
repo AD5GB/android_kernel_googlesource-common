@@ -808,14 +808,27 @@ call_cache_fn:	adr	r12, proc_types
 		.align	2
 		.type	proc_types,#object
 proc_types:
-		.word	0x41000000		@ old ARM ID
-		.word	0xff00f000
+		.word	0x41560600		@ ARM6/610
+		.word	0xffffffe0
+		W(b)	__arm6_mmu_cache_off	@ works, but slow
+		W(b)	__arm6_mmu_cache_off
+		mov	pc, lr
+ THUMB(		nop				)
+@		b	__arm6_mmu_cache_on		@ untested
+@		b	__arm6_mmu_cache_off
+@		b	__armv3_mmu_cache_flush
+
+#if !defined(CONFIG_CPU_V7)
+		/* This collides with some V7 IDs, preventing correct detection */
+		.word	0x00000000		@ old ARM ID
+		.word	0x0000f000
 		mov	pc, lr
  THUMB(		nop				)
 		mov	pc, lr
  THUMB(		nop				)
 		mov	pc, lr
  THUMB(		nop				)
+#endif
 
 		.word	0x41007000		@ ARM7/710
 		.word	0xfff8fe00

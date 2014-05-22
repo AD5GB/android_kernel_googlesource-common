@@ -539,7 +539,7 @@ static noinline int replay_one_extent(struct btrfs_trans_handle *trans,
 	} else if (found_type == BTRFS_FILE_EXTENT_INLINE) {
 		size = btrfs_file_extent_inline_len(eb, item);
 		nbytes = btrfs_file_extent_ram_bytes(eb, item);
-		extent_end = ALIGN(start + size, root->sectorsize);
+		extent_end = (start + size + mask) & ~mask;
 	} else {
 		ret = 0;
 		goto out;
@@ -682,7 +682,7 @@ static noinline int replay_one_extent(struct btrfs_trans_handle *trans,
 	}
 
 	inode_add_bytes(inode, nbytes);
-	ret = btrfs_update_inode(trans, root, inode);
+	btrfs_update_inode(trans, root, inode);
 out:
 	if (inode)
 		iput(inode);
@@ -738,6 +738,8 @@ static noinline int drop_one_dir_item(struct btrfs_trans_handle *trans,
 out:
 	kfree(name);
 	iput(inode);
+
+	btrfs_run_delayed_items(trans, root);
 	return ret;
 }
 
@@ -907,12 +909,7 @@ again:
 				ret = btrfs_unlink_inode(trans, root, dir,
 							 inode, victim_name,
 							 victim_name_len);
-				kfree(victim_name);
-				if (ret)
-					return ret;
 				btrfs_run_delayed_items(trans, root);
-				*search_done = 1;
-				goto again;
 			}
 			kfree(victim_name);
 
@@ -1796,8 +1793,10 @@ again:
 			btrfs_inc_nlink(inode);
 			ret = btrfs_unlink_inode(trans, root, dir, inode,
 						 name, name_len);
-			if (!ret)
-				btrfs_run_delayed_items(trans, root);
+			BUG_ON(ret);
+
+			btrfs_run_delayed_items(trans, root);
+
 			kfree(name);
 			iput(inode);
 			if (ret)

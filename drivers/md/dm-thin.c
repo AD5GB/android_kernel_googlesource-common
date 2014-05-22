@@ -22,6 +22,7 @@
  * Tunable constants
  */
 #define ENDIO_HOOK_POOL_SIZE 1024
+#define DEFERRED_SET_SIZE 64
 #define MAPPING_POOL_SIZE 1024
 #define PRISON_CELLS 1024
 #define COMMIT_PERIOD HZ
@@ -629,7 +630,7 @@ static void process_prepared_mapping(struct dm_thin_new_mapping *m)
 		bio->bi_end_io = m->saved_bi_end_io;
 
 	if (m->err) {
-		cell_error(pool, m->cell);
+		cell_error(m->cell);
 		goto out;
 	}
 
@@ -640,8 +641,8 @@ static void process_prepared_mapping(struct dm_thin_new_mapping *m)
 	 */
 	r = dm_thin_insert_block(tc->td, m->virt_block, m->data_block);
 	if (r) {
-		DMERR_LIMIT("dm_thin_insert_block() failed");
-		cell_error(pool, m->cell);
+		DMERR("dm_thin_insert_block() failed");
+		cell_error(m->cell);
 		goto out;
 	}
 
@@ -1054,6 +1055,12 @@ static void process_discard(struct thin_c *tc, struct bio *bio)
 			 * a block boundary.  So we submit the discard of a
 			 * partial block appropriately.
 			 */
+			sector_t offset = bio->bi_sector - (block << pool->block_shift);
+			unsigned remaining = (pool->sectors_per_block - offset) << 9;
+			bio->bi_size = min(bio->bi_size, remaining);
+
+			cell_release_singleton(cell, bio);
+			cell_release_singleton(cell2, bio);
 			if ((!lookup_result.shared) && pool->pf.discard_passdown)
 				remap_and_issue(tc, bio, lookup_result.block);
 			else
@@ -2091,8 +2098,8 @@ static int pool_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		 * stacking of discard limits (this keeps the pool and
 		 * thin devices' discard limits consistent).
 		 */
-		ti->discards_supported = true;
-		ti->discard_zeroes_data_unsupported = true;
+		ti->discards_supported = 1;
+		ti->discard_zeroes_data_unsupported = 1;
 	}
 	ti->private = pt;
 
@@ -2637,11 +2644,7 @@ static void set_discard_limits(struct pool_c *pt, struct queue_limits *limits)
 	/*
 	 * discard_granularity is just a hint, and not enforced.
 	 */
-	if (pt->adjusted_pf.discard_passdown) {
-		data_limits = &bdev_get_queue(pt->data_dev->bdev)->limits;
-		limits->discard_granularity = data_limits->discard_granularity;
-	} else
-		limits->discard_granularity = pool->sectors_per_block << SECTOR_SHIFT;
+	limits->discard_granularity = pool->sectors_per_block << SECTOR_SHIFT;
 }
 
 static void pool_io_hints(struct dm_target *ti, struct queue_limits *limits)
@@ -2795,11 +2798,9 @@ static int thin_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	/* In case the pool supports discards, pass them on. */
 	if (tc->pool->pf.discard_enabled) {
-		ti->discards_supported = true;
-		ti->num_discard_bios = 1;
-		ti->discard_zeroes_data_unsupported = true;
-		/* Discard bios must be split on a block boundary */
-		ti->split_discard_bios = true;
+		ti->discards_supported = 1;
+		ti->num_discard_requests = 1;
+		ti->discard_zeroes_data_unsupported = 1;
 	}
 
 	dm_put(pool_md);

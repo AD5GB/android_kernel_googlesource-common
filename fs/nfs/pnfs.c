@@ -749,7 +749,7 @@ send_layoutget(struct pnfs_layout_hdr *lo,
 	struct inode *ino = lo->plh_inode;
 	struct nfs_server *server = NFS_SERVER(ino);
 	struct nfs4_layoutget *lgp;
-	struct pnfs_layout_segment *lseg;
+	struct pnfs_layout_segment *lseg = NULL;
 
 	dprintk("--> %s\n", __func__);
 
@@ -765,40 +765,19 @@ send_layoutget(struct pnfs_layout_hdr *lo,
 	lgp->args.type = server->pnfs_curr_ld->id;
 	lgp->args.inode = ino;
 	lgp->args.ctx = get_nfs_open_context(ctx);
+	lgp->lsegpp = &lseg;
 	lgp->gfp_flags = gfp_flags;
 
 	/* Synchronously retrieve layout information from server and
 	 * store in lseg.
 	 */
-	lseg = nfs4_proc_layoutget(lgp, gfp_flags);
-	if (IS_ERR(lseg)) {
-		switch (PTR_ERR(lseg)) {
-		case -ENOMEM:
-		case -ERESTARTSYS:
-			break;
-		default:
-			/* remember that LAYOUTGET failed and suspend trying */
-			pnfs_layout_io_set_failed(lo, range->iomode);
-		}
-		return NULL;
+	nfs4_proc_layoutget(lgp, gfp_flags);
+	if (!lseg) {
+		/* remember that LAYOUTGET failed and suspend trying */
+		set_bit(lo_fail_bit(range->iomode), &lo->plh_flags);
 	}
 
 	return lseg;
-}
-
-static void pnfs_clear_layoutcommit(struct inode *inode,
-		struct list_head *head)
-{
-	struct nfs_inode *nfsi = NFS_I(inode);
-	struct pnfs_layout_segment *lseg, *tmp;
-
-	if (!test_and_clear_bit(NFS_INO_LAYOUTCOMMIT, &nfsi->flags))
-		return;
-	list_for_each_entry_safe(lseg, tmp, &nfsi->layout->plh_segs, pls_list) {
-		if (!test_and_clear_bit(NFS_LSEG_LAYOUTCOMMIT, &lseg->pls_flags))
-			continue;
-		pnfs_lseg_dec_and_remove_zero(lseg, head);
-	}
 }
 
 /*

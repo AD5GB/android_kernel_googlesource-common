@@ -254,27 +254,7 @@ int usb_hcd_pci_probe(struct pci_dev *dev, const struct pci_device_id *id)
 
 	pci_set_master(dev);
 
-	/* Note: dev_set_drvdata must be called while holding the rwsem */
-	if (dev->class == CL_EHCI) {
-		down_write(&companions_rwsem);
-		dev_set_drvdata(&dev->dev, hcd);
-		for_each_companion(dev, hcd, ehci_pre_add);
-		retval = usb_add_hcd(hcd, hcd_irq, IRQF_SHARED);
-		if (retval != 0)
-			dev_set_drvdata(&dev->dev, NULL);
-		for_each_companion(dev, hcd, ehci_post_add);
-		up_write(&companions_rwsem);
-	} else {
-		down_read(&companions_rwsem);
-		dev_set_drvdata(&dev->dev, hcd);
-		retval = usb_add_hcd(hcd, hcd_irq, IRQF_SHARED);
-		if (retval != 0)
-			dev_set_drvdata(&dev->dev, NULL);
-		else
-			for_each_companion(dev, hcd, non_ehci_add);
-		up_read(&companions_rwsem);
-	}
-
+	retval = usb_add_hcd(hcd, hcd_irq, IRQF_SHARED);
 	if (retval != 0)
 		goto unmap_registers;
 

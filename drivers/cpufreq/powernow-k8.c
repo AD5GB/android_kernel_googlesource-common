@@ -981,6 +981,12 @@ struct powernowk8_target_arg {
 	unsigned			relation;
 };
 
+struct powernowk8_target_arg {
+	struct cpufreq_policy		*pol;
+	unsigned			targfreq;
+	unsigned			relation;
+};
+
 static long powernowk8_target_fn(void *arg)
 {
 	struct powernowk8_target_arg *pta = arg;
@@ -1038,7 +1044,11 @@ static long powernowk8_target_fn(void *arg)
 	}
 	mutex_unlock(&fidvid_mutex);
 
-	pol->cur = find_khz_freq_from_fid(data->currfid);
+	if (cpu_family == CPU_HW_PSTATE)
+		pol->cur = find_khz_freq_from_pstate(data->powernow_table,
+				data->powernow_table[newstate].index);
+	else
+		pol->cur = find_khz_freq_from_fid(data->currfid);
 
 	return 0;
 }

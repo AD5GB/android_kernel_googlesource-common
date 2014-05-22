@@ -1141,8 +1141,7 @@ static bool sh_mmcif_end_cmd(struct sh_mmcif_host *host)
 static irqreturn_t sh_mmcif_irqt(int irq, void *dev_id)
 {
 	struct sh_mmcif_host *host = dev_id;
-	struct mmc_request *mrq;
-	bool wait = false;
+	struct mmc_request *mrq = host->mrq;
 
 	cancel_delayed_work_sync(&host->timeout_work);
 
@@ -1196,10 +1195,8 @@ static irqreturn_t sh_mmcif_irqt(int irq, void *dev_id)
 		break;
 	case MMCIF_WAIT_FOR_READ_END:
 	case MMCIF_WAIT_FOR_WRITE_END:
-		if (host->sd_error) {
+		if (host->sd_error)
 			mrq->data->error = sh_mmcif_error_manage(host);
-			dev_dbg(&host->pd->dev, "%s(): %d\n", __func__, mrq->data->error);
-		}
 		break;
 	default:
 		BUG();

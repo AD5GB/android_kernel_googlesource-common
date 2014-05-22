@@ -864,14 +864,6 @@ int tpm_do_selftest(struct tpm_chip *chip)
 		cmd.header.in = pcrread_header;
 		cmd.params.pcrread_in.pcr_idx = cpu_to_be32(0);
 		rc = tpm_transmit(chip, (u8 *) &cmd, READ_PCR_RESULT_SIZE);
-		/* Some buggy TPMs will not respond to tpm_tis_ready() for
-		 * around 300ms while the self test is ongoing, keep trying
-		 * until the self test duration expires. */
-		if (rc == -ETIME) {
-			dev_info(chip->dev, HW_ERR "TPM command timed out during continue self test");
-			msleep(delay_msec);
-			continue;
-		}
 
 		if (rc < TPM_HEADER_SIZE)
 			return -EFAULT;

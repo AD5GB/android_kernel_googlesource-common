@@ -2318,6 +2318,7 @@ static int tsi721_probe(struct pci_dev *pdev,
 				  const struct pci_device_id *id)
 {
 	struct tsi721_device *priv;
+	int cap;
 	int err;
 
 	priv = kzalloc(sizeof(struct tsi721_device), GFP_KERNEL);

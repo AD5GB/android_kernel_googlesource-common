@@ -61,10 +61,19 @@ static void core_sleep_idle(void)
 
 void arch_cpu_idle(void)
 {
-	if (!frv_dma_inprogress)
-		core_sleep_idle();
-	else
-		local_irq_enable();
+	/* endless idle loop with no priority at all */
+	while (1) {
+		rcu_idle_enter();
+		while (!need_resched()) {
+			check_pgt_cache();
+
+			if (!frv_dma_inprogress && idle)
+				idle();
+		}
+		rcu_idle_exit();
+
+		schedule_preempt_disabled();
+	}
 }
 
 void machine_restart(char * __unused)

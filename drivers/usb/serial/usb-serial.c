@@ -762,7 +762,7 @@ static int usb_serial_probe(struct usb_interface *interface,
 		retval = type->probe(serial, id);
 
 		if (retval) {
-			dev_dbg(ddev, "sub driver rejected device\n");
+			dbg("sub driver rejected device");
 			usb_serial_put(serial);
 			module_put(type->driver.owner);
 			return retval;
@@ -834,7 +834,7 @@ static int usb_serial_probe(struct usb_interface *interface,
 		 * properly during a later invocation of usb_serial_probe
 		 */
 		if (num_bulk_in == 0 || num_bulk_out == 0) {
-			dev_info(ddev, "PL-2303 hack: descriptors matched but endpoints did not\n");
+			dev_info(&interface->dev, "PL-2303 hack: descriptors matched but endpoints did not\n");
 			usb_serial_put(serial);
 			module_put(type->driver.owner);
 			return -ENODEV;
@@ -847,7 +847,8 @@ static int usb_serial_probe(struct usb_interface *interface,
 	if (type == &usb_serial_generic_device) {
 		num_ports = num_bulk_out;
 		if (num_ports == 0) {
-			dev_err(ddev, "Generic device with no bulk out, not allowed.\n");
+			dev_err(&interface->dev,
+			    "Generic device with no bulk out, not allowed.\n");
 			usb_serial_put(serial);
 			module_put(type->driver.owner);
 			return -EIO;
@@ -1347,8 +1348,6 @@ static int usb_serial_register(struct usb_serial_driver *driver)
 		return -EINVAL;
 	}
 
-	usb_serial_operations_init(driver);
-
 	/* Add this device to our list of devices */
 	mutex_lock(&table_lock);
 	list_add(&driver->driver_list, &usb_serial_driver_list);
@@ -1379,8 +1378,9 @@ static void usb_serial_deregister(struct usb_serial_driver *device)
  * @name: name of the usb_driver for this set of @serial_drivers
  * @id_table: list of all devices this @serial_drivers set binds to
  *
- * Registers all the drivers in the @serial_drivers array, and dynamically
- * creates a struct usb_driver with the name @name and id_table of @id_table.
+ * Registers @udriver and all the drivers in the @serial_drivers array.
+ * Automatically fills in the .no_dynamic_id and PM fields in @udriver and
+ * the .usb_driver field in each serial driver.
  */
 int usb_serial_register_drivers(struct usb_serial_driver *const serial_drivers[],
 				const char *name,
@@ -1398,7 +1398,7 @@ int usb_serial_register_drivers(struct usb_serial_driver *const serial_drivers[]
 	 * Performance hack: We don't want udriver to be probed until
 	 * the serial drivers are registered, because the probe would
 	 * simply fail for lack of a matching serial driver.
-	 * So we leave udriver's id_table set to NULL until we are all set.
+	 * Therefore save off udriver's id_table until we are all set.
 	 *
 	 * Suspend/resume support is implemented in the usb-serial core,
 	 * so fill in the PM-related fields in udriver.
@@ -1412,17 +1412,6 @@ int usb_serial_register_drivers(struct usb_serial_driver *const serial_drivers[]
 	udriver->supports_autosuspend = 1;
 	udriver->suspend = usb_serial_suspend;
 	udriver->resume = usb_serial_resume;
-	udriver->probe = usb_serial_probe;
-	udriver->disconnect = usb_serial_disconnect;
-
-	/* we only set the reset_resume field if the serial_driver has one */
-	for (sd = serial_drivers; *sd; ++sd) {
-		if ((*sd)->reset_resume) {
-			udriver->reset_resume = usb_serial_reset_resume;
-			break;
-		}
-	}
-
 	rc = usb_register(udriver);
 	if (rc)
 		return rc;

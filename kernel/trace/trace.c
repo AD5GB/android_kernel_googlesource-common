@@ -550,8 +550,8 @@ EXPORT_SYMBOL_GPL(tracing_snapshot_alloc);
  */
 void tracing_off(void)
 {
-	if (global_trace.trace_buffer.buffer)
-		ring_buffer_record_off(global_trace.trace_buffer.buffer);
+	if (global_trace.buffer)
+		ring_buffer_record_off(global_trace.buffer);
 	/*
 	 * This flag is only looked at when buffers haven't been
 	 * allocated yet. We don't really care about the race
@@ -634,8 +634,6 @@ static const char *trace_options[] = {
 	"overwrite",
 	"disable_on_free",
 	"irq-info",
-	"markers",
-	"function-trace",
 	"print-tgid",
 	NULL
 };
@@ -886,9 +884,9 @@ update_max_tr(struct trace_array *tr, struct task_struct *tsk, int cpu)
 
 	arch_spin_lock(&ftrace_max_lock);
 
-	buf = tr->trace_buffer.buffer;
-	tr->trace_buffer.buffer = tr->max_buffer.buffer;
-	tr->max_buffer.buffer = buf;
+	buf = tr->buffer;
+	tr->buffer = max_tr.buffer;
+	max_tr.buffer = buf;
 
 	__update_max_tr(tr, tsk, cpu);
 	arch_spin_unlock(&ftrace_max_lock);
@@ -2367,7 +2365,14 @@ static void print_func_help_header(struct trace_buffer *buf, struct seq_file *m)
 	seq_puts(m, "#              | |       |          |         |\n");
 }
 
-static void print_func_help_header_tgid(struct trace_buffer *buf, struct seq_file *m)
+static void print_func_help_header_tgid(struct trace_array *tr, struct seq_file *m)
+{
+	print_event_info(tr, m);
+	seq_puts(m, "#           TASK-PID    TGID   CPU#      TIMESTAMP  FUNCTION\n");
+	seq_puts(m, "#              | |        |      |          |         |\n");
+}
+
+static void print_func_help_header_irq(struct trace_array *tr, struct seq_file *m)
 {
 	print_event_info(buf, m);
 	seq_puts(m, "#           TASK-PID    TGID   CPU#      TIMESTAMP  FUNCTION\n");
@@ -2386,9 +2391,9 @@ static void print_func_help_header_irq(struct trace_buffer *buf, struct seq_file
 	seq_puts(m, "#              | |       |   ||||       |         |\n");
 }
 
-static void print_func_help_header_irq_tgid(struct trace_buffer *buf, struct seq_file *m)
+static void print_func_help_header_irq_tgid(struct trace_array *tr, struct seq_file *m)
 {
-	print_event_info(buf, m);
+	print_event_info(tr, m);
 	seq_puts(m, "#                                      _-----=> irqs-off\n");
 	seq_puts(m, "#                                     / _----=> need-resched\n");
 	seq_puts(m, "#                                    | / _---=> hardirq/softirq\n");
@@ -2699,14 +2704,14 @@ void trace_default_header(struct seq_file *m)
 		if (!(trace_flags & TRACE_ITER_VERBOSE)) {
 			if (trace_flags & TRACE_ITER_IRQ_INFO)
 				if (trace_flags & TRACE_ITER_TGID)
-					print_func_help_header_irq_tgid(iter->trace_buffer, m);
+					print_func_help_header_irq_tgid(iter->tr, m);
 				else
-					print_func_help_header_irq(iter->trace_buffer, m);
+					print_func_help_header_irq(iter->tr, m);
 			else
 				if (trace_flags & TRACE_ITER_TGID)
-					print_func_help_header_tgid(iter->trace_buffer, m);
+					print_func_help_header_tgid(iter->tr, m);
 				else
-					print_func_help_header(iter->trace_buffer, m);
+					print_func_help_header(iter->tr, m);
 		}
 	}
 }
@@ -3143,13 +3148,13 @@ tracing_cpumask_write(struct file *filp, const char __user *ubuf,
 		 */
 		if (cpumask_test_cpu(cpu, tracing_cpumask) &&
 				!cpumask_test_cpu(cpu, tracing_cpumask_new)) {
-			atomic_inc(&per_cpu_ptr(tr->trace_buffer.data, cpu)->disabled);
-			ring_buffer_record_disable_cpu(tr->trace_buffer.buffer, cpu);
+			atomic_inc(&global_trace.data[cpu]->disabled);
+			ring_buffer_record_disable_cpu(global_trace.buffer, cpu);
 		}
 		if (!cpumask_test_cpu(cpu, tracing_cpumask) &&
 				cpumask_test_cpu(cpu, tracing_cpumask_new)) {
-			atomic_dec(&per_cpu_ptr(tr->trace_buffer.data, cpu)->disabled);
-			ring_buffer_record_enable_cpu(tr->trace_buffer.buffer, cpu);
+			atomic_dec(&global_trace.data[cpu]->disabled);
+			ring_buffer_record_enable_cpu(global_trace.buffer, cpu);
 		}
 	}
 	arch_spin_unlock(&ftrace_max_lock);
@@ -3248,15 +3253,15 @@ int trace_keep_overwrite(struct tracer *tracer, u32 mask, int set)
 	return 0;
 }
 
-int set_tracer_flag(struct trace_array *tr, unsigned int mask, int enabled)
+int set_tracer_flag(unsigned int mask, int enabled)
 {
 	/* do nothing if flag is already set */
 	if (!!(trace_flags & mask) == !!enabled)
 		return 0;
 
 	/* Give the tracer a chance to approve the change */
-	if (tr->current_trace->flag_changed)
-		if (tr->current_trace->flag_changed(tr->current_trace, mask, !!enabled))
+	if (current_trace->flag_changed)
+		if (current_trace->flag_changed(current_trace, mask, !!enabled))
 			return -EINVAL;
 
 	if (enabled)
@@ -3267,15 +3272,8 @@ int set_tracer_flag(struct trace_array *tr, unsigned int mask, int enabled)
 	if (mask == TRACE_ITER_RECORD_CMD)
 		trace_event_enable_cmd_record(enabled);
 
-	if (mask == TRACE_ITER_OVERWRITE) {
-		ring_buffer_change_overwrite(tr->trace_buffer.buffer, enabled);
-#ifdef CONFIG_TRACER_MAX_TRACE
-		ring_buffer_change_overwrite(tr->max_buffer.buffer, enabled);
-#endif
-	}
-
-	if (mask == TRACE_ITER_PRINTK)
-		trace_printk_start_stop_comm(enabled);
+	if (mask == TRACE_ITER_OVERWRITE)
+		ring_buffer_change_overwrite(global_trace.buffer, enabled);
 
 	return 0;
 }
@@ -3298,38 +3296,17 @@ static int trace_set_options(struct trace_array *tr, char *option)
 
 	for (i = 0; trace_options[i]; i++) {
 		if (strcmp(cmp, trace_options[i]) == 0) {
-			ret = set_tracer_flag(tr, 1 << i, !neg);
+			ret = set_tracer_flag(1 << i, !neg);
 			break;
 		}
 	}
 
 	/* If no option could be set, test the specific tracer options */
 	if (!trace_options[i])
-		ret = set_tracer_option(tr->current_trace, cmp, neg);
+		ret = set_tracer_option(current_trace, cmp, neg);
 
 	mutex_unlock(&trace_types_lock);
 
-	return ret;
-}
-
-static ssize_t
-tracing_trace_options_write(struct file *filp, const char __user *ubuf,
-			size_t cnt, loff_t *ppos)
-{
-	struct seq_file *m = filp->private_data;
-	struct trace_array *tr = m->private;
-	char buf[64];
-	int ret;
-
-	if (cnt >= sizeof(buf))
-		return -EINVAL;
-
-	if (copy_from_user(&buf, ubuf, cnt))
-		return -EFAULT;
-
-	buf[cnt] = 0;
-
-	ret = trace_set_options(tr, buf);
 	if (ret < 0)
 		return ret;
 
@@ -3498,6 +3475,50 @@ tracing_saved_cmdlines_read(struct file *file, char __user *ubuf,
 static const struct file_operations tracing_saved_cmdlines_fops = {
 	.open	= tracing_open_generic,
 	.read	= tracing_saved_cmdlines_read,
+	.llseek	= generic_file_llseek,
+};
+
+static ssize_t
+tracing_saved_tgids_read(struct file *file, char __user *ubuf,
+				size_t cnt, loff_t *ppos)
+{
+	char *file_buf;
+	char *buf;
+	int len = 0;
+	int pid;
+	int i;
+
+	file_buf = kmalloc(SAVED_CMDLINES*(16+1+16), GFP_KERNEL);
+	if (!file_buf)
+		return -ENOMEM;
+
+	buf = file_buf;
+
+	for (i = 0; i < SAVED_CMDLINES; i++) {
+		int tgid;
+		int r;
+
+		pid = map_cmdline_to_pid[i];
+		if (pid == -1 || pid == NO_CMDLINE_MAP)
+			continue;
+
+		tgid = trace_find_tgid(pid);
+		r = sprintf(buf, "%d %d\n", pid, tgid);
+		buf += r;
+		len += r;
+	}
+
+	len = simple_read_from_buffer(ubuf, cnt, ppos,
+				      file_buf, len);
+
+	kfree(file_buf);
+
+	return len;
+}
+
+static const struct file_operations tracing_saved_tgids_fops = {
+	.open	= tracing_open_generic,
+	.read	= tracing_saved_tgids_read,
 	.llseek	= generic_file_llseek,
 };
 
@@ -3758,18 +3779,11 @@ static int tracing_set_tracer(const char *buf)
 
 	trace_branch_disable();
 
-	tr->current_trace->enabled = false;
+	current_trace->enabled = false;
 
-	if (tr->current_trace->reset)
-		tr->current_trace->reset(tr);
-
-	/* Current trace needs to be nop_trace before synchronize_sched */
-	tr->current_trace = &nop_trace;
-
-#ifdef CONFIG_TRACER_MAX_TRACE
-	had_max_tr = tr->allocated_snapshot;
-
-	if (had_max_tr && !t->use_max_tr) {
+	if (current_trace && current_trace->reset)
+		current_trace->reset(tr);
+	if (current_trace && current_trace->use_max_tr) {
 		/*
 		 * We need to make sure that the update_max_tr sees that
 		 * current_trace changed to nop_trace to keep it from
@@ -3799,8 +3813,7 @@ static int tracing_set_tracer(const char *buf)
 			goto out;
 	}
 
-	tr->current_trace = t;
-	tr->current_trace->enabled = true;
+	current_trace->enabled = true;
 	trace_branch_enable(tr);
  out:
 	mutex_unlock(&trace_types_lock);
@@ -4091,6 +4104,7 @@ waitagain:
 	memset(&iter->seq, 0,
 	       sizeof(struct trace_iterator) -
 	       offsetof(struct trace_iterator, seq));
+	cpumask_clear(iter->started);
 	iter->pos = -1;
 
 	trace_event_read_lock();
@@ -5548,7 +5562,7 @@ trace_options_core_write(struct file *filp, const char __user *ubuf, size_t cnt,
 		return -EINVAL;
 
 	mutex_lock(&trace_types_lock);
-	ret = set_tracer_flag(tr, 1 << index, val);
+	ret = set_tracer_flag(1 << index, val);
 	mutex_unlock(&trace_types_lock);
 
 	if (ret < 0)
@@ -5772,10 +5786,9 @@ static void init_trace_buffers(struct trace_array *tr, struct trace_buffer *buf)
 	}
 }
 
-static int
-allocate_trace_buffer(struct trace_array *tr, struct trace_buffer *buf, int size)
-{
-	enum ring_buffer_flags rb_flags;
+	d_tracer = tracing_init_dentry();
+	if (!d_tracer)
+		return 0;
 
 	rb_flags = trace_flags & TRACE_ITER_OVERWRITE ? RB_FL_OVERWRITE : 0;
 
@@ -6033,7 +6046,10 @@ init_tracer_debugfs(struct trace_array *tr, struct dentry *d_tracer)
 	trace_create_file("saved_tgids", 0444, d_tracer,
 			  tr, &tracing_saved_tgids_fops);
 
-	trace_create_file("trace_clock", 0644, d_tracer, tr,
+	trace_create_file("saved_tgids", 0444, d_tracer,
+			NULL, &tracing_saved_tgids_fops);
+
+	trace_create_file("trace_clock", 0644, d_tracer, NULL,
 			  &trace_clock_fops);
 
 	trace_create_file("tracing_on", 0644, d_tracer,
@@ -6269,7 +6285,7 @@ void ftrace_dump(enum ftrace_dump_mode oops_dump_mode)
 	trace_flags |= old_userobj;
 
 	for_each_tracing_cpu(cpu) {
-		atomic_dec(&per_cpu_ptr(iter.trace_buffer->data, cpu)->disabled);
+		atomic_dec(&iter.tr->data[cpu]->disabled);
 	}
  	atomic_dec(&dump_running);
 	local_irq_restore(flags);

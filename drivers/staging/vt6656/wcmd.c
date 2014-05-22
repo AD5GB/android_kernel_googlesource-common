@@ -266,8 +266,9 @@ struct vnt_tx_mgmt *s_MgrMakeProbeRequest(struct vnt_private *pDevice,
     return pTxPacket;
 }
 
-void vCommandTimerWait(struct vnt_private *pDevice, unsigned long MSecond)
+void vCommandTimerWait(void *hDeviceContext, unsigned long MSecond)
 {
+	PSDevice pDevice = (PSDevice)hDeviceContext;
 
 	init_timer(&pDevice->sTimerCommand);
 

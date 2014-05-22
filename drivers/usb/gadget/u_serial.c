@@ -1056,9 +1056,106 @@ gs_port_alloc(unsigned port_num, struct usb_cdc_line_coding *coding)
 	port->port_line_coding = *coding;
 
 	ports[port_num].port = port;
-out:
-	mutex_unlock(&ports[port_num].lock);
-	return ret;
+
+	return 0;
+}
+
+/**
+ * gserial_setup - initialize TTY driver for one or more ports
+ * @g: gadget to associate with these ports
+ * @count: how many ports to support
+ * Context: may sleep
+ *
+ * The TTY stack needs to know in advance how many devices it should
+ * plan to manage.  Use this call to set up the ports you will be
+ * exporting through USB.  Later, connect them to functions based
+ * on what configuration is activated by the USB host; and disconnect
+ * them as appropriate.
+ *
+ * An example would be a two-configuration device in which both
+ * configurations expose port 0, but through different functions.
+ * One configuration could even expose port 1 while the other
+ * one doesn't.
+ *
+ * Returns negative errno or zero.
+ */
+int gserial_setup(struct usb_gadget *g, unsigned count)
+{
+	unsigned			i;
+	struct usb_cdc_line_coding	coding;
+	int				status;
+
+	if (count == 0 || count > N_PORTS)
+		return -EINVAL;
+
+	gs_tty_driver = alloc_tty_driver(count);
+	if (!gs_tty_driver)
+		return -ENOMEM;
+
+	gs_tty_driver->driver_name = "g_serial";
+	gs_tty_driver->name = PREFIX;
+	/* uses dynamically assigned dev_t values */
+
+	gs_tty_driver->type = TTY_DRIVER_TYPE_SERIAL;
+	gs_tty_driver->subtype = SERIAL_TYPE_NORMAL;
+	gs_tty_driver->flags = TTY_DRIVER_REAL_RAW | TTY_DRIVER_DYNAMIC_DEV;
+	gs_tty_driver->init_termios = tty_std_termios;
+
+	/* 9600-8-N-1 ... matches defaults expected by "usbser.sys" on
+	 * MS-Windows.  Otherwise, most of these flags shouldn't affect
+	 * anything unless we were to actually hook up to a serial line.
+	 */
+	gs_tty_driver->init_termios.c_cflag =
+			B9600 | CS8 | CREAD | HUPCL | CLOCAL;
+	gs_tty_driver->init_termios.c_ispeed = 9600;
+	gs_tty_driver->init_termios.c_ospeed = 9600;
+
+	coding.dwDTERate = cpu_to_le32(9600);
+	coding.bCharFormat = 8;
+	coding.bParityType = USB_CDC_NO_PARITY;
+	coding.bDataBits = USB_CDC_1_STOP_BITS;
+
+	tty_set_operations(gs_tty_driver, &gs_tty_ops);
+
+	/* make devices be openable */
+	for (i = 0; i < count; i++) {
+		mutex_init(&ports[i].lock);
+		status = gs_port_alloc(i, &coding);
+		if (status) {
+			count = i;
+			goto fail;
+		}
+	}
+	n_ports = count;
+
+	/* export the driver ... */
+	status = tty_register_driver(gs_tty_driver);
+	if (status) {
+		pr_err("%s: cannot register, err %d\n",
+				__func__, status);
+		goto fail;
+	}
+
+	/* ... and sysfs class devices, so mdev/udev make /dev/ttyGS* */
+	for (i = 0; i < count; i++) {
+		struct device	*tty_dev;
+
+		tty_dev = tty_register_device(gs_tty_driver, i, &g->dev);
+		if (IS_ERR(tty_dev))
+			pr_warning("%s: no classdev for port %d, err %ld\n",
+				__func__, i, PTR_ERR(tty_dev));
+	}
+
+	pr_debug("%s: registered %d ttyGS* device%s\n", __func__,
+			count, (count == 1) ? "" : "s");
+
+	return status;
+fail:
+	while (count--)
+		kfree(ports[count].port);
+	put_tty_driver(gs_tty_driver);
+	gs_tty_driver = NULL;
+	return status;
 }
 
 static int gs_closed(struct gs_port *port)

@@ -431,7 +431,7 @@ static u32 user2credits(u32 user)
 	return (user * HZ * CREDITS_PER_JIFFY) / XT_HASHLIMIT_SCALE;
 }
 
-static u32 user2credits_byte(u32 user)
+static void rateinfo_recalc(struct dsthash_ent *dh, unsigned long now)
 {
 	u64 us = user;
 	us *= HZ * CREDITS_PER_JIFFY_BYTES;
@@ -627,6 +627,12 @@ hashlimit_mt(const struct sk_buff *skb, struct xt_action_param *par)
 			dh->expires = jiffies + msecs_to_jiffies(hinfo->cfg.expire);
 			rateinfo_init(dh, hinfo);
 		}
+		dh->expires = jiffies + msecs_to_jiffies(hinfo->cfg.expire);
+		dh->rateinfo.prev = jiffies;
+		dh->rateinfo.credit = user2credits(hinfo->cfg.avg *
+		                      hinfo->cfg.burst);
+		dh->rateinfo.credit_cap = dh->rateinfo.credit;
+		dh->rateinfo.cost = user2credits(hinfo->cfg.avg);
 	} else {
 		/* update expiration timeout */
 		dh->expires = now + msecs_to_jiffies(hinfo->cfg.expire);

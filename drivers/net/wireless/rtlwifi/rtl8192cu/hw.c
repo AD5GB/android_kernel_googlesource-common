@@ -2057,9 +2057,6 @@ static void rtl92cu_update_hal_rate_table(struct ieee80211_hw *hw,
 	}
 
 	rtl_write_dword(rtlpriv, REG_ARFR0 + ratr_index * 4, ratr_value);
-
-	RT_TRACE(rtlpriv, COMP_RATR, DBG_DMESG, "%x\n",
-		 rtl_read_dword(rtlpriv, REG_ARFR0));
 }
 
 static void rtl92cu_update_hal_rate_mask(struct ieee80211_hw *hw,

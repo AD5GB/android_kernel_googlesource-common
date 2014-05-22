@@ -34,6 +34,9 @@ static bool rr_transmit(struct team *team, struct sk_buff *skb)
 	port = team_get_port_by_index_rcu(team, port_index);
 	if (unlikely(!port))
 		goto drop;
+	port = __get_first_port_up(team, port);
+	if (unlikely(!port))
+		goto drop;
 	port = team_get_first_port_txable_rcu(team, port);
 	if (unlikely(!port))
 		goto drop;

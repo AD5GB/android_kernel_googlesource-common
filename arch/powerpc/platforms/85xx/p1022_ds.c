@@ -157,6 +157,57 @@ static phys_addr_t lbc_br_to_phys(const void *ecm, unsigned int count, u32 br)
 #endif
 }
 
+struct fsl_law {
+	u32	lawbar;
+	u32	reserved1;
+	u32	lawar;
+	u32	reserved[5];
+};
+
+#define LAWBAR_MASK	0x00F00000
+#define LAWBAR_SHIFT	12
+
+#define LAWAR_EN	0x80000000
+#define LAWAR_TGT_MASK	0x01F00000
+#define LAW_TRGT_IF_LBC	(0x04 << 20)
+
+#define LAWAR_MASK	(LAWAR_EN | LAWAR_TGT_MASK)
+#define LAWAR_MATCH	(LAWAR_EN | LAW_TRGT_IF_LBC)
+
+#define BR_BA		0xFFFF8000
+
+/*
+ * Map a BRx value to a physical address
+ *
+ * The localbus BRx registers only store the lower 32 bits of the address.  To
+ * obtain the upper four bits, we need to scan the LAW table.  The entry which
+ * maps to the localbus will contain the upper four bits.
+ */
+static phys_addr_t lbc_br_to_phys(const void *ecm, unsigned int count, u32 br)
+{
+#ifndef CONFIG_PHYS_64BIT
+	/*
+	 * If we only have 32-bit addressing, then the BRx address *is* the
+	 * physical address.
+	 */
+	return br & BR_BA;
+#else
+	const struct fsl_law *law = ecm + 0xc08;
+	unsigned int i;
+
+	for (i = 0; i < count; i++) {
+		u64 lawbar = in_be32(&law[i].lawbar);
+		u32 lawar = in_be32(&law[i].lawar);
+
+		if ((lawar & LAWAR_MASK) == LAWAR_MATCH)
+			/* Extract the upper four bits */
+			return (br & BR_BA) | ((lawbar & LAWBAR_MASK) << 12);
+	}
+
+	return 0;
+#endif
+}
+
 /**
  * p1022ds_set_monitor_port: switch the output to a different monitor port
  */
@@ -213,7 +264,7 @@ static void p1022ds_set_monitor_port(enum fsl_diu_monitor_port port)
 		goto exit;
 	}
 
-	iprop = of_get_property(law_node, "fsl,num-laws", NULL);
+	iprop = of_get_property(law_node, "fsl,num-laws", 0);
 	if (!iprop) {
 		pr_err("p1022ds: LAW node is missing fsl,num-laws property\n");
 		goto exit;
@@ -266,7 +317,7 @@ static void p1022ds_set_monitor_port(enum fsl_diu_monitor_port port)
 		goto exit;
 	}
 	cs1_addr = lbc_br_to_phys(ecm, num_laws, br1);
-	if (!cs1_addr) {
+	if (!cs0_addr) {
 		pr_err("p1022ds: could not determine physical address for CS1"
 		       " (BR1=%08x)\n", br1);
 		goto exit;
@@ -442,6 +493,26 @@ void __init p1022_ds_pic_init(void)
 
 #if defined(CONFIG_FB_FSL_DIU) || defined(CONFIG_FB_FSL_DIU_MODULE)
 
+/*
+ * Disables a node in the device tree.
+ *
+ * This function is called before kmalloc() is available, so the 'new' object
+ * should be allocated in the global area.  The easiest way is to do that is
+ * to allocate one static local variable for each call to this function.
+ */
+static void __init disable_one_node(struct device_node *np, struct property *new)
+{
+	struct property *old;
+
+	old = of_find_property(np, new->name, NULL);
+	if (old)
+		prom_update_property(np, new, old);
+	else
+		prom_add_property(np, new);
+
+	pr_info("p1022ds: disabling %s node\n", np->full_name);
+}
+
 /* TRUE if there is a "video=fslfb" command-line parameter. */
 static bool fslfb;
 
@@ -500,17 +571,7 @@ static void __init p1022_ds_setup_arch(void)
 					.length = sizeof("disabled"),
 				};
 
-				/*
-				 * of_update_property() is called before
-				 * kmalloc() is available, so the 'new' object
-				 * should be allocated in the global area.
-				 * The easiest way is to do that is to
-				 * allocate one static local variable for each
-				 * call to this function.
-				 */
-				pr_info("p1022ds: disabling %s node",
-					np2->full_name);
-				of_update_property(np2, &nor_status);
+				disable_one_node(np2, &nor_status);
 				of_node_put(np2);
 			}
 
@@ -524,9 +585,7 @@ static void __init p1022_ds_setup_arch(void)
 					.length = sizeof("disabled"),
 				};
 
-				pr_info("p1022ds: disabling %s node",
-					np2->full_name);
-				of_update_property(np2, &nand_status);
+				disable_one_node(np2, &nand_status);
 				of_node_put(np2);
 			}
 

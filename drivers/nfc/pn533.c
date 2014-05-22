@@ -1767,9 +1767,14 @@ static int pn533_send_poll_frame(struct pn533 *dev)
 
 static void pn533_wq_poll(struct work_struct *work)
 {
-	struct pn533 *dev = container_of(work, struct pn533, poll_work);
-	struct pn533_poll_modulations *cur_mod;
+	struct pn533_cmd_jump_dep_response *resp;
+	struct nfc_target nfc_target;
+	u8 target_gt_len;
 	int rc;
+	struct pn533_cmd_jump_dep *cmd = (struct pn533_cmd_jump_dep *)arg;
+	u8 active = cmd->active;
+
+	kfree(arg);
 
 	cur_mod = dev->poll_mod_active[dev->poll_mod_curr];
 
@@ -1994,9 +1999,8 @@ static int pn533_in_dep_link_up_complete(struct pn533 *dev, void *arg,
 		goto error;
 	}
 
-	rsp = (struct pn533_cmd_jump_dep_response *)resp->data;
-
-	rc = rsp->status & PN533_CMD_RET_MASK;
+	resp = (struct pn533_cmd_jump_dep_response *) params;
+	rc = resp->status & PN533_CMD_RET_MASK;
 	if (rc != PN533_CMD_RET_SUCCESS) {
 		nfc_dev_err(&dev->interface->dev,
 			    "Bringing DEP link up failed (error 0x%x)", rc);
@@ -2026,8 +2030,8 @@ static int pn533_in_dep_link_up_complete(struct pn533 *dev, void *arg,
 					  rsp->gt, target_gt_len);
 	if (rc == 0)
 		rc = nfc_dep_link_is_up(dev->nfc_dev,
-					dev->nfc_dev->targets[0].idx,
-					!active, NFC_RF_INITIATOR);
+						dev->nfc_dev->targets[0].idx,
+						!active, NFC_RF_INITIATOR);
 
 error:
 	dev_kfree_skb(resp);
@@ -2113,15 +2117,13 @@ static int pn533_dep_link_up(struct nfc_dev *nfc_dev, struct nfc_target *target,
 		return -ENOMEM;
 	}
 
-	*arg = !comm_mode;
+	pn533_tx_frame_finish(dev->out_frame);
 
-	rc = pn533_send_cmd_async(dev, PN533_CMD_IN_JUMP_FOR_DEP, skb,
-				  pn533_in_dep_link_up_complete, arg);
-
-	if (rc < 0) {
-		dev_kfree_skb(skb);
-		kfree(arg);
-	}
+	rc = pn533_send_cmd_frame_async(dev, dev->out_frame, dev->in_frame,
+				dev->in_maxlen,	pn533_in_dep_link_up_complete,
+				cmd, GFP_KERNEL);
+	if (rc < 0)
+		kfree(cmd);
 
 	return rc;
 }

@@ -469,9 +469,16 @@ static int tcp_v6_send_synack(struct sock *sk, struct dst_entry *dst,
 	struct sk_buff * skb;
 	int err = -ENOMEM;
 
-	/* First, grab a route. */
-	if (!dst && (dst = inet6_csk_route_req(sk, fl6, req)) == NULL)
-		goto done;
+	memset(&fl6, 0, sizeof(fl6));
+	fl6.flowi6_proto = IPPROTO_TCP;
+	fl6.daddr = treq->rmt_addr;
+	fl6.saddr = treq->loc_addr;
+	fl6.flowlabel = 0;
+	fl6.flowi6_oif = treq->iif;
+	fl6.flowi6_mark = inet_rsk(req)->ir_mark;
+	fl6.fl6_dport = inet_rsk(req)->rmt_port;
+	fl6.fl6_sport = inet_rsk(req)->loc_port;
+	security_req_classify_flow(req, flowi6_to_flowi(&fl6));
 
 	skb = tcp_make_synack(sk, dst, req, NULL);
 
@@ -1428,7 +1435,7 @@ ipv6_pktoptions:
 		if (np->rxopt.bits.rxhlim || np->rxopt.bits.rxohlim)
 			np->mcast_hops = ipv6_hdr(opt_skb)->hop_limit;
 		if (np->rxopt.bits.rxtclass)
-			np->rcv_tclass = ipv6_get_dsfield(ipv6_hdr(skb));
+			np->rcv_tclass = ipv6_tclass(ipv6_hdr(opt_skb));
 		if (ipv6_opt_accepted(sk, opt_skb)) {
 			skb_set_owner_r(opt_skb, sk);
 			opt_skb = xchg(&np->pktoptions, opt_skb);

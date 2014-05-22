@@ -1027,8 +1027,7 @@ static void atombios_crtc_set_pll(struct drm_crtc *crtc, struct drm_display_mode
 		radeon_compute_pll_legacy(pll, radeon_crtc->adjusted_clock, &pll_clock,
 					  &fb_div, &frac_fb_div, &ref_div, &post_div);
 
-	atombios_crtc_program_ss(rdev, ATOM_DISABLE, radeon_crtc->pll_id,
-				 radeon_crtc->crtc_id, &radeon_crtc->ss);
+	atombios_crtc_program_ss(rdev, ATOM_DISABLE, radeon_crtc->pll_id, radeon_crtc->crtc_id, &ss);
 
 	atombios_crtc_program_pll(crtc, radeon_crtc->crtc_id, radeon_crtc->pll_id,
 				  encoder_mode, radeon_encoder->encoder_id, mode->clock,
@@ -1052,8 +1051,7 @@ static void atombios_crtc_set_pll(struct drm_crtc *crtc, struct drm_display_mode
 			radeon_crtc->ss.step = step_size;
 		}
 
-		atombios_crtc_program_ss(rdev, ATOM_ENABLE, radeon_crtc->pll_id,
-					 radeon_crtc->crtc_id, &radeon_crtc->ss);
+		atombios_crtc_program_ss(rdev, ATOM_ENABLE, radeon_crtc->pll_id, radeon_crtc->crtc_id, &ss);
 	}
 }
 
@@ -1657,31 +1655,25 @@ static int radeon_atom_pick_pll(struct drm_crtc *crtc)
 		DRM_ERROR("unable to allocate a PPLL\n");
 		return ATOM_PPLL_INVALID;
 	} else if (ASIC_IS_DCE4(rdev)) {
-		/* in DP mode, the DP ref clock can come from PPLL, DCPLL, or ext clock,
-		 * depending on the asic:
-		 * DCE4: PPLL or ext clock
-		 * DCE5: PPLL, DCPLL, or ext clock
-		 * DCE6: PPLL, PPLL0, or ext clock
-		 *
-		 * Setting ATOM_PPLL_INVALID will cause SetPixelClock to skip
-		 * PPLL/DCPLL programming and only program the DP DTO for the
-		 * crtc virtual pixel clock.
-		 */
-		if (ENCODER_MODE_IS_DP(atombios_get_encoder_mode(radeon_crtc->encoder))) {
-			if (rdev->clock.dp_extclk)
-				/* skip PPLL programming if using ext clock */
-				return ATOM_PPLL_INVALID;
-			else if (ASIC_IS_DCE6(rdev))
-				/* use PPLL0 for all DP */
-				return ATOM_PPLL0;
-			else if (ASIC_IS_DCE5(rdev))
-				/* use DCPLL for all DP */
-				return ATOM_DCPLL;
-			else {
-				/* use the same PPLL for all DP monitors */
-				pll = radeon_get_shared_dp_ppll(crtc);
-				if (pll != ATOM_PPLL_INVALID)
-					return pll;
+		list_for_each_entry(test_encoder, &dev->mode_config.encoder_list, head) {
+			if (test_encoder->crtc && (test_encoder->crtc == crtc)) {
+				/* in DP mode, the DP ref clock can come from PPLL, DCPLL, or ext clock,
+				 * depending on the asic:
+				 * DCE4: PPLL or ext clock
+				 * DCE5: DCPLL or ext clock
+				 *
+				 * Setting ATOM_PPLL_INVALID will cause SetPixelClock to skip
+				 * PPLL/DCPLL programming and only program the DP DTO for the
+				 * crtc virtual pixel clock.
+				 */
+				if (ENCODER_MODE_IS_DP(atombios_get_encoder_mode(test_encoder))) {
+					if (rdev->clock.dp_extclk)
+						return ATOM_PPLL_INVALID;
+					else if (ASIC_IS_DCE6(rdev))
+						return ATOM_PPLL0;
+					else if (ASIC_IS_DCE5(rdev))
+						return ATOM_DCPLL;
+				}
 			}
 		} else {
 			/* use the same PPLL for all monitors with the same clock */
@@ -1811,8 +1803,13 @@ static bool atombios_crtc_mode_fixup(struct drm_crtc *crtc,
 
 static void atombios_crtc_prepare(struct drm_crtc *crtc)
 {
+	struct radeon_crtc *radeon_crtc = to_radeon_crtc(crtc);
 	struct drm_device *dev = crtc->dev;
 	struct radeon_device *rdev = dev->dev_private;
+
+	radeon_crtc->in_mode_set = true;
+	/* pick pll */
+	radeon_crtc->pll_id = radeon_atom_pick_pll(crtc);
 
 	/* disable crtc pair power gating before programming */
 	if (ASIC_IS_DCE6(rdev))
@@ -1824,8 +1821,11 @@ static void atombios_crtc_prepare(struct drm_crtc *crtc)
 
 static void atombios_crtc_commit(struct drm_crtc *crtc)
 {
+	struct radeon_crtc *radeon_crtc = to_radeon_crtc(crtc);
+
 	atombios_crtc_dpms(crtc, DRM_MODE_DPMS_ON);
 	atombios_lock_crtc(crtc, ATOM_DISABLE);
+	radeon_crtc->in_mode_set = false;
 }
 
 static void atombios_crtc_disable(struct drm_crtc *crtc)
@@ -1869,10 +1869,7 @@ static void atombios_crtc_disable(struct drm_crtc *crtc)
 		break;
 	}
 done:
-	radeon_crtc->pll_id = ATOM_PPLL_INVALID;
-	radeon_crtc->adjusted_clock = 0;
-	radeon_crtc->encoder = NULL;
-	radeon_crtc->connector = NULL;
+	radeon_crtc->pll_id = -1;
 }
 
 static const struct drm_crtc_helper_funcs atombios_helper_funcs = {

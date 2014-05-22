@@ -149,7 +149,7 @@ static void bcma_core_mips_set_irq(struct bcma_device *dev, unsigned int irq)
 		bcma_write32(mdev, BCMA_MIPS_MIPS74K_INTMASK(0),
 			    bcma_read32(mdev, BCMA_MIPS_MIPS74K_INTMASK(0)) &
 			    ~(1 << irqflag));
-	else if (oldirq != 5)
+	else
 		bcma_write32(mdev, BCMA_MIPS_MIPS74K_INTMASK(oldirq), 0);
 
 	/* assign the new one */

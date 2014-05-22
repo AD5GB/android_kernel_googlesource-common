@@ -245,7 +245,6 @@ static int l2tp_ip_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 {
 	struct inet_sock *inet = inet_sk(sk);
 	struct sockaddr_l2tpip *addr = (struct sockaddr_l2tpip *) uaddr;
-	struct net *net = sock_net(sk);
 	int ret;
 	int chk_addr_ret;
 
@@ -303,7 +302,22 @@ out_in_use:
 static int l2tp_ip_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 {
 	struct sockaddr_l2tpip *lsa = (struct sockaddr_l2tpip *) uaddr;
-	int rc;
+	struct inet_sock *inet = inet_sk(sk);
+	struct flowi4 *fl4;
+	struct rtable *rt;
+	__be32 saddr;
+	int oif, rc;
+
+	if (sock_flag(sk, SOCK_ZAPPED)) /* Must bind first - autobinding does not work */
+		return -EINVAL;
+
+	if (addr_len < sizeof(*lsa))
+		return -EINVAL;
+
+	if (lsa->l2tp_family != AF_INET)
+		return -EAFNOSUPPORT;
+
+	lock_sock(sk);
 
 	if (sock_flag(sk, SOCK_ZAPPED)) /* Must bind first - autobinding does not work */
 		return -EINVAL;

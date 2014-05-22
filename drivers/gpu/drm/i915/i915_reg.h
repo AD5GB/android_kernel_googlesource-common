@@ -33,6 +33,8 @@
 #define _MASKED_BIT_ENABLE(a) (((a) << 16) | (a))
 #define _MASKED_BIT_DISABLE(a) ((a) << 16)
 
+#define _MASKED_BIT_ENABLE(a) (((a) << 16) | (a))
+
 /*
  * The Bridge device's PCI config space has information about the
  * fb aperture size and the amount of pre-reserved memory.
@@ -223,9 +225,6 @@
 #define   MI_DISPLAY_FLIP_IVB_SPRITE_B (3 << 19)
 #define   MI_DISPLAY_FLIP_IVB_PLANE_C  (4 << 19)
 #define   MI_DISPLAY_FLIP_IVB_SPRITE_C (5 << 19)
-#define MI_ARB_ON_OFF		MI_INSTR(0x08, 0)
-#define   MI_ARB_ENABLE			(1<<0)
-#define   MI_ARB_DISABLE		(0<<0)
 
 #define MI_SET_CONTEXT		MI_INSTR(0x18, 0)
 #define   MI_MM_SPACE_GTT		(1<<8)
@@ -539,7 +538,7 @@
  * the enables for writing to the corresponding low bit.
  */
 #define _3D_CHICKEN	0x02084
-#define  _3D_CHICKEN_HIZ_PLANE_DISABLE_MSAA_4X_SNB	(1 << 10)
+#define _3D_CHICKEN_HIZ_PLANE_DISABLE_MSAA_4X_SNB	(1 << 10)
 #define _3D_CHICKEN2	0x0208c
 /* Disables pipelining of read flushes past the SF-WIZ interface.
  * Required on all Ironlake steppings according to the B-Spec, but the
@@ -558,6 +557,9 @@
 #define GEN6_GT_MODE	0x20d0
 #define   GEN6_GT_MODE_HI				(1 << 9)
 #define   GEN6_TD_FOUR_ROW_DISPATCH_DISABLE		(1 << 5)
+
+#define GEN6_GT_MODE	0x20d0
+#define   GEN6_GT_MODE_HI	(1 << 9)
 
 #define GFX_MODE	0x02520
 #define GFX_MODE_GEN7	0x0229c
@@ -617,6 +619,8 @@
 					will not assert AGPBUSY# and will only
 					be delivered when out of C3. */
 #define   INSTPM_FORCE_ORDERING				(1<<7) /* GEN6+ */
+#define   INSTPM_TLB_INVALIDATE	(1<<9)
+#define   INSTPM_SYNC_FLUSH	(1<<5)
 #define ACTHD	        0x020c8
 #define FW_BLC		0x020d8
 #define FW_BLC2		0x020dc
@@ -756,7 +760,6 @@
 #define   GEN7_FF_TS_SCHED_HS0		(0x3<<16)
 #define   GEN7_FF_TS_SCHED_LOAD_BALANCE	(0x1<<16)
 #define   GEN7_FF_TS_SCHED_HW		(0x0<<16) /* Default */
-#define   GEN7_FF_VS_REF_CNT_FFME	(1 << 15)
 #define   GEN7_FF_VS_SCHED_HS1		(0x5<<12)
 #define   GEN7_FF_VS_SCHED_HS0		(0x3<<12)
 #define   GEN7_FF_VS_SCHED_LOAD_BALANCE	(0x1<<12) /* Default */
@@ -1673,14 +1676,13 @@
 #define CRT_HOTPLUG_DETECT_VOLTAGE_325MV	(0 << 2)
 #define CRT_HOTPLUG_DETECT_VOLTAGE_475MV	(1 << 2)
 
-#define PORT_HOTPLUG_STAT	(dev_priv->info->display_mmio_offset + 0x61114)
-/* HDMI/DP bits are gen4+ */
-#define   PORTB_HOTPLUG_LIVE_STATUS               (1 << 29)
-#define   PORTC_HOTPLUG_LIVE_STATUS               (1 << 28)
-#define   PORTD_HOTPLUG_LIVE_STATUS               (1 << 27)
-#define   PORTD_HOTPLUG_INT_STATUS		(3 << 21)
-#define   PORTC_HOTPLUG_INT_STATUS		(3 << 19)
-#define   PORTB_HOTPLUG_INT_STATUS		(3 << 17)
+#define PORT_HOTPLUG_STAT	0x61114
+#define   HDMIB_HOTPLUG_INT_STATUS		(1 << 29)
+#define   DPB_HOTPLUG_INT_STATUS		(1 << 29)
+#define   HDMIC_HOTPLUG_INT_STATUS		(1 << 28)
+#define   DPC_HOTPLUG_INT_STATUS		(1 << 28)
+#define   HDMID_HOTPLUG_INT_STATUS		(1 << 27)
+#define   DPD_HOTPLUG_INT_STATUS		(1 << 27)
 /* CRT/TV common between gen3+ */
 #define   CRT_HOTPLUG_INT_STATUS		(1 << 11)
 #define   TV_HOTPLUG_INT_STATUS			(1 << 10)
@@ -1695,45 +1697,14 @@
 #define   SDVOB_HOTPLUG_INT_STATUS_I965		(3 << 2)
 #define   SDVOC_HOTPLUG_INT_STATUS_I915		(1 << 7)
 #define   SDVOB_HOTPLUG_INT_STATUS_I915		(1 << 6)
-#define   HOTPLUG_INT_STATUS_G4X		(CRT_HOTPLUG_INT_STATUS | \
-						 SDVOB_HOTPLUG_INT_STATUS_G4X | \
-						 SDVOC_HOTPLUG_INT_STATUS_G4X | \
-						 PORTB_HOTPLUG_INT_STATUS | \
-						 PORTC_HOTPLUG_INT_STATUS | \
-						 PORTD_HOTPLUG_INT_STATUS)
 
-#define HOTPLUG_INT_STATUS_I965			(CRT_HOTPLUG_INT_STATUS | \
-						 SDVOB_HOTPLUG_INT_STATUS_I965 | \
-						 SDVOC_HOTPLUG_INT_STATUS_I965 | \
-						 PORTB_HOTPLUG_INT_STATUS | \
-						 PORTC_HOTPLUG_INT_STATUS | \
-						 PORTD_HOTPLUG_INT_STATUS)
-
-#define HOTPLUG_INT_STATUS_I915			(CRT_HOTPLUG_INT_STATUS | \
-						 SDVOB_HOTPLUG_INT_STATUS_I915 | \
-						 SDVOC_HOTPLUG_INT_STATUS_I915 | \
-						 PORTB_HOTPLUG_INT_STATUS | \
-						 PORTC_HOTPLUG_INT_STATUS | \
-						 PORTD_HOTPLUG_INT_STATUS)
-
-/* SDVO and HDMI port control.
- * The same register may be used for SDVO or HDMI */
-#define GEN3_SDVOB	0x61140
-#define GEN3_SDVOC	0x61160
-#define GEN4_HDMIB	GEN3_SDVOB
-#define GEN4_HDMIC	GEN3_SDVOC
-#define PCH_SDVOB	0xe1140
-#define PCH_HDMIB	PCH_SDVOB
-#define PCH_HDMIC	0xe1150
-#define PCH_HDMID	0xe1160
-
-/* Gen 3 SDVO bits: */
-#define   SDVO_ENABLE				(1 << 31)
-#define   SDVO_PIPE_SEL(pipe)			((pipe) << 30)
-#define   SDVO_PIPE_SEL_MASK			(1 << 30)
-#define   SDVO_PIPE_B_SELECT			(1 << 30)
-#define   SDVO_STALL_SELECT			(1 << 29)
-#define   SDVO_INTERRUPT_ENABLE			(1 << 26)
+/* SDVO port control */
+#define SDVOB			0x61140
+#define SDVOC			0x61160
+#define   SDVO_ENABLE		(1 << 31)
+#define   SDVO_PIPE_B_SELECT	(1 << 30)
+#define   SDVO_STALL_SELECT	(1 << 29)
+#define   SDVO_INTERRUPT_ENABLE	(1 << 26)
 /**
  * 915G/GM SDVO pixel multiplier.
  * Programmed value is multiplier - 1, up to 5x.
@@ -4246,7 +4217,7 @@
 #define EDP_LINK_TRAIN_600MV_0DB_IVB		(0x30 <<22)
 #define EDP_LINK_TRAIN_600MV_3_5DB_IVB		(0x36 <<22)
 #define EDP_LINK_TRAIN_800MV_0DB_IVB		(0x38 <<22)
-#define EDP_LINK_TRAIN_800MV_3_5DB_IVB		(0x33 <<22)
+#define EDP_LINK_TRAIN_800MV_3_5DB_IVB		(0x3e <<22)
 
 /* legacy values */
 #define EDP_LINK_TRAIN_500MV_0DB_IVB		(0x00 <<22)

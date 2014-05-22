@@ -238,9 +238,9 @@ static int kvp_file_init(void)
 	int i;
 	int alloc_unit = sizeof(struct kvp_record) * ENTRIES_PER_BLOCK;
 
-	if (access(KVP_CONFIG_LOC, F_OK)) {
-		if (mkdir(KVP_CONFIG_LOC, 0755 /* rwxr-xr-x */)) {
-			syslog(LOG_ERR, " Failed to create %s", KVP_CONFIG_LOC);
+	if (access("/var/opt/hyperv", F_OK)) {
+		if (mkdir("/var/opt/hyperv", S_IRUSR | S_IWUSR | S_IROTH)) {
+			syslog(LOG_ERR, " Failed to create /var/opt/hyperv");
 			exit(EXIT_FAILURE);
 		}
 	}

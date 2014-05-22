@@ -453,7 +453,7 @@ EXPORT_SYMBOL_GPL(dma_buf_kunmap);
 
 /**
  * dma_buf_mmap - Setup up a userspace mmap with the given vma
- * @dmabuf:	[in]	buffer that should back the vma
+ * @dma_buf:	[in]	buffer that should back the vma
  * @vma:	[in]	vma for the mmap
  * @pgoff:	[in]	offset in pages where this mmap should start within the
  * 			dma-buf buffer.
@@ -468,9 +468,6 @@ EXPORT_SYMBOL_GPL(dma_buf_kunmap);
 int dma_buf_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma,
 		 unsigned long pgoff)
 {
-	struct file *oldfile;
-	int ret;
-
 	if (WARN_ON(!dmabuf || !vma))
 		return -EINVAL;
 
@@ -484,228 +481,14 @@ int dma_buf_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma,
 		return -EINVAL;
 
 	/* readjust the vma */
-	get_file(dmabuf->file);
-	oldfile = vma->vm_file;
+	if (vma->vm_file)
+		fput(vma->vm_file);
+
 	vma->vm_file = dmabuf->file;
+	get_file(vma->vm_file);
+
 	vma->vm_pgoff = pgoff;
 
-	ret = dmabuf->ops->mmap(dmabuf, vma);
-	if (ret) {
-		/* restore old parameters on failure */
-		vma->vm_file = oldfile;
-		fput(dmabuf->file);
-	} else {
-		if (oldfile)
-			fput(oldfile);
-	}
-	return ret;
-
+	return dmabuf->ops->mmap(dmabuf, vma);
 }
 EXPORT_SYMBOL_GPL(dma_buf_mmap);
-
-/**
- * dma_buf_vmap - Create virtual mapping for the buffer object into kernel
- * address space. Same restrictions as for vmap and friends apply.
- * @dmabuf:	[in]	buffer to vmap
- *
- * This call may fail due to lack of virtual mapping address space.
- * These calls are optional in drivers. The intended use for them
- * is for mapping objects linear in kernel space for high use objects.
- * Please attempt to use kmap/kunmap before thinking about these interfaces.
- */
-void *dma_buf_vmap(struct dma_buf *dmabuf)
-{
-	void *ptr;
-
-	if (WARN_ON(!dmabuf))
-		return NULL;
-
-	if (!dmabuf->ops->vmap)
-		return NULL;
-
-	mutex_lock(&dmabuf->lock);
-	if (dmabuf->vmapping_counter) {
-		dmabuf->vmapping_counter++;
-		BUG_ON(!dmabuf->vmap_ptr);
-		ptr = dmabuf->vmap_ptr;
-		goto out_unlock;
-	}
-
-	BUG_ON(dmabuf->vmap_ptr);
-
-	ptr = dmabuf->ops->vmap(dmabuf);
-	if (IS_ERR_OR_NULL(ptr))
-		goto out_unlock;
-
-	dmabuf->vmap_ptr = ptr;
-	dmabuf->vmapping_counter = 1;
-
-out_unlock:
-	mutex_unlock(&dmabuf->lock);
-	return ptr;
-}
-EXPORT_SYMBOL_GPL(dma_buf_vmap);
-
-/**
- * dma_buf_vunmap - Unmap a vmap obtained by dma_buf_vmap.
- * @dmabuf:	[in]	buffer to vunmap
- * @vaddr:	[in]	vmap to vunmap
- */
-void dma_buf_vunmap(struct dma_buf *dmabuf, void *vaddr)
-{
-	if (WARN_ON(!dmabuf))
-		return;
-
-	BUG_ON(!dmabuf->vmap_ptr);
-	BUG_ON(dmabuf->vmapping_counter == 0);
-	BUG_ON(dmabuf->vmap_ptr != vaddr);
-
-	mutex_lock(&dmabuf->lock);
-	if (--dmabuf->vmapping_counter == 0) {
-		if (dmabuf->ops->vunmap)
-			dmabuf->ops->vunmap(dmabuf, vaddr);
-		dmabuf->vmap_ptr = NULL;
-	}
-	mutex_unlock(&dmabuf->lock);
-}
-EXPORT_SYMBOL_GPL(dma_buf_vunmap);
-
-#ifdef CONFIG_DEBUG_FS
-static int dma_buf_describe(struct seq_file *s)
-{
-	int ret;
-	struct dma_buf *buf_obj;
-	struct dma_buf_attachment *attach_obj;
-	int count = 0, attach_count;
-	size_t size = 0;
-
-	ret = mutex_lock_interruptible(&db_list.lock);
-
-	if (ret)
-		return ret;
-
-	seq_printf(s, "\nDma-buf Objects:\n");
-	seq_printf(s, "\texp_name\tsize\tflags\tmode\tcount\n");
-
-	list_for_each_entry(buf_obj, &db_list.head, list_node) {
-		ret = mutex_lock_interruptible(&buf_obj->lock);
-
-		if (ret) {
-			seq_printf(s,
-				  "\tERROR locking buffer object: skipping\n");
-			continue;
-		}
-
-		seq_printf(s, "\t");
-
-		seq_printf(s, "\t%s\t%08zu\t%08x\t%08x\t%08ld\n",
-				buf_obj->exp_name, buf_obj->size,
-				buf_obj->file->f_flags, buf_obj->file->f_mode,
-				(long)(buf_obj->file->f_count.counter));
-
-		seq_printf(s, "\t\tAttached Devices:\n");
-		attach_count = 0;
-
-		list_for_each_entry(attach_obj, &buf_obj->attachments, node) {
-			seq_printf(s, "\t\t");
-
-			seq_printf(s, "%s\n", attach_obj->dev->init_name);
-			attach_count++;
-		}
-
-		seq_printf(s, "\n\t\tTotal %d devices attached\n",
-				attach_count);
-
-		count++;
-		size += buf_obj->size;
-		mutex_unlock(&buf_obj->lock);
-	}
-
-	seq_printf(s, "\nTotal %d objects, %zu bytes\n", count, size);
-
-	mutex_unlock(&db_list.lock);
-	return 0;
-}
-
-static int dma_buf_show(struct seq_file *s, void *unused)
-{
-	void (*func)(struct seq_file *) = s->private;
-	func(s);
-	return 0;
-}
-
-static int dma_buf_debug_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, dma_buf_show, inode->i_private);
-}
-
-static const struct file_operations dma_buf_debug_fops = {
-	.open           = dma_buf_debug_open,
-	.read           = seq_read,
-	.llseek         = seq_lseek,
-	.release        = single_release,
-};
-
-static struct dentry *dma_buf_debugfs_dir;
-
-static int dma_buf_init_debugfs(void)
-{
-	int err = 0;
-	dma_buf_debugfs_dir = debugfs_create_dir("dma_buf", NULL);
-	if (IS_ERR(dma_buf_debugfs_dir)) {
-		err = PTR_ERR(dma_buf_debugfs_dir);
-		dma_buf_debugfs_dir = NULL;
-		return err;
-	}
-
-	err = dma_buf_debugfs_create_file("bufinfo", dma_buf_describe);
-
-	if (err)
-		pr_debug("dma_buf: debugfs: failed to create node bufinfo\n");
-
-	return err;
-}
-
-static void dma_buf_uninit_debugfs(void)
-{
-	if (dma_buf_debugfs_dir)
-		debugfs_remove_recursive(dma_buf_debugfs_dir);
-}
-
-int dma_buf_debugfs_create_file(const char *name,
-				int (*write)(struct seq_file *))
-{
-	struct dentry *d;
-
-	d = debugfs_create_file(name, S_IRUGO, dma_buf_debugfs_dir,
-			write, &dma_buf_debug_fops);
-
-	if (IS_ERR(d))
-		return PTR_ERR(d);
-
-	return 0;
-}
-#else
-static inline int dma_buf_init_debugfs(void)
-{
-	return 0;
-}
-static inline void dma_buf_uninit_debugfs(void)
-{
-}
-#endif
-
-static int __init dma_buf_init(void)
-{
-	mutex_init(&db_list.lock);
-	INIT_LIST_HEAD(&db_list.head);
-	dma_buf_init_debugfs();
-	return 0;
-}
-subsys_initcall(dma_buf_init);
-
-static void __exit dma_buf_deinit(void)
-{
-	dma_buf_uninit_debugfs();
-}
-__exitcall(dma_buf_deinit);

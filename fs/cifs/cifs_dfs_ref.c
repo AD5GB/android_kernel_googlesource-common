@@ -173,8 +173,9 @@ char *cifs_compose_mount_options(const char *sb_mountdata,
 	 * much longer than the original. Add the max length of an address
 	 * string to the length of the original string to allow for worst case.
 	 */
-	md_len = strlen(sb_mountdata) + INET6_ADDRSTRLEN;
-	mountdata = kzalloc(md_len + 1, GFP_KERNEL);
+	md_len = strlen(sb_mountdata) + rc + strlen(ref->node_name) + 12 +
+			INET6_ADDRSTRLEN;
+	mountdata = kzalloc(md_len+1, GFP_KERNEL);
 	if (mountdata == NULL) {
 		rc = -ENOMEM;
 		goto compose_mount_options_err;

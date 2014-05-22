@@ -6228,6 +6228,10 @@ static int nfs4_xdr_dec_open(struct rpc_rqst *rqstp, struct xdr_stream *xdr,
 	status = decode_getfh(xdr, &res->fh);
 	if (status)
 		goto out;
+	if (decode_getfattr(xdr, res->f_attr, res->server) != 0)
+		goto out;
+	if (decode_restorefh(xdr) != 0)
+		goto out;
 	if (res->access_request)
 		decode_access(xdr, &res->access_supported, &res->access_result);
 	decode_getfattr(xdr, res->f_attr, res->server);

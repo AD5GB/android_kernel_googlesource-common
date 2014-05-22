@@ -140,7 +140,7 @@ static void s_vProcessRxMACHeader(struct vnt_private *pDevice,
         cbHeaderSize += 6;
     } else if (!compare_ether_addr(pbyRxBuffer, &pDevice->abySNAP_RFC1042[0])) {
         cbHeaderSize += 6;
-        pwType = (u16 *) (pbyRxBufferAddr + cbHeaderSize);
+        pwType = (PWORD) (pbyRxBufferAddr + cbHeaderSize);
 	if ((*pwType == cpu_to_be16(ETH_P_IPX)) ||
 	    (*pwType == cpu_to_le16(0xF380))) {
 		cbHeaderSize -= 8;
@@ -1102,7 +1102,7 @@ static int s_bHandleRxEncryption(struct vnt_private *pDevice, u8 *pbyFrame,
         // TKIP/AES
 
         PayloadLen -= (WLAN_HDR_ADDR3_LEN + 8 + 4); // 24 is 802.11 header, 8 is IV&ExtIV, 4 is crc
-        *pdwRxTSC47_16 = cpu_to_le32(*(u32 *)(pbyIV + 4));
+        *pdwRxTSC47_16 = cpu_to_le32(*(PDWORD)(pbyIV + 4));
 	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"ExtIV: %x\n", *pdwRxTSC47_16);
         if (byDecMode == KEY_CTL_TKIP) {
             *pwRxTSC15_0 = cpu_to_le16(MAKEWORD(*(pbyIV+2), *pbyIV));
@@ -1200,7 +1200,7 @@ static int s_bHostWepRxEncryption(struct vnt_private *pDevice, u8 *pbyFrame,
         // TKIP/AES
 
         PayloadLen -= (WLAN_HDR_ADDR3_LEN + 8 + 4); // 24 is 802.11 header, 8 is IV&ExtIV, 4 is crc
-        *pdwRxTSC47_16 = cpu_to_le32(*(u32 *)(pbyIV + 4));
+        *pdwRxTSC47_16 = cpu_to_le32(*(PDWORD)(pbyIV + 4));
 	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"ExtIV: %x\n", *pdwRxTSC47_16);
 
         if (byDecMode == KEY_CTL_TKIP) {

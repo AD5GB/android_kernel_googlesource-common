@@ -257,16 +257,8 @@ int usb_add_config(struct usb_composite_dev *,
 		struct usb_configuration *,
 		int (*)(struct usb_configuration *));
 
-void usb_remove_config(struct usb_composite_dev *,
+int usb_remove_config(struct usb_composite_dev *,
 		struct usb_configuration *);
-
-/* predefined index for usb_composite_driver */
-enum {
-	USB_GADGET_MANUFACTURER_IDX	= 0,
-	USB_GADGET_PRODUCT_IDX,
-	USB_GADGET_SERIAL_IDX,
-	USB_GADGET_FIRST_AVAIL_IDX,
-};
 
 /**
  * struct usb_composite_driver - groups configurations into a gadget

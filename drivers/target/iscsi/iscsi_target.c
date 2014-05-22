@@ -445,6 +445,7 @@ static void iscsit_free_np(struct iscsi_np *np)
 {
 	if (np->np_socket)
 		sock_release(np->np_socket);
+	return 0;
 }
 
 int iscsit_del_np(struct iscsi_np *np)
@@ -3535,7 +3536,7 @@ iscsit_build_reject(struct iscsi_cmd *cmd, struct iscsi_conn *conn,
 	hdr->opcode		= ISCSI_OP_REJECT;
 	hdr->flags		|= ISCSI_FLAG_CMD_FINAL;
 	hton24(hdr->dlength, ISCSI_HDR_LEN);
-	hdr->ffffffff		= cpu_to_be32(0xffffffff);
+	hdr->ffffffff		= 0xffffffff;
 	cmd->stat_sn		= conn->stat_sn++;
 	hdr->statsn		= cpu_to_be32(cmd->stat_sn);
 	hdr->exp_cmdsn		= cpu_to_be32(conn->sess->exp_cmd_sn);
@@ -4259,12 +4260,6 @@ int iscsit_close_connection(
 
 	if (conn->sock)
 		sock_release(conn->sock);
-
-	if (conn->conn_transport->iscsit_free_conn)
-		conn->conn_transport->iscsit_free_conn(conn);
-
-	iscsit_put_transport(conn->conn_transport);
-
 	conn->thread_set = NULL;
 
 	pr_debug("Moving to TARG_CONN_STATE_FREE.\n");

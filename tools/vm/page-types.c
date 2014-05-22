@@ -34,9 +34,9 @@
 #include <sys/fcntl.h>
 #include <sys/mount.h>
 #include <sys/statfs.h>
-#include "../../include/uapi/linux/magic.h"
-#include "../../include/uapi/linux/kernel-page-flags.h"
-#include <lk/debugfs.h>
+#include "../../include/linux/magic.h"
+#include "../../include/linux/kernel-page-flags.h"
+
 
 #ifndef MAX_PATH
 # define MAX_PATH 256

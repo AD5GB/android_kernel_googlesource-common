@@ -276,6 +276,14 @@ static void ceph_unlock_page_vector(struct page **pages, int num_pages)
 		unlock_page(pages[i]);
 }
 
+static void ceph_unlock_page_vector(struct page **pages, int num_pages)
+{
+	int i;
+
+	for (i = 0; i < num_pages; i++)
+		unlock_page(pages[i]);
+}
+
 /*
  * start an async read(ahead) operation.  return nr_pages we submitted
  * a read for on success, or negative error code.
@@ -316,7 +324,7 @@ static int start_read(struct inode *inode, struct list_head *page_list, int max)
 				    1, CEPH_OSD_OP_READ,
 				    CEPH_OSD_FLAG_READ, NULL,
 				    ci->i_truncate_seq, ci->i_truncate_size,
-				    false);
+				    NULL, false, 1, 0);
 	if (IS_ERR(req))
 		return PTR_ERR(req);
 
@@ -838,11 +846,19 @@ get_more_pages:
 				BUG_ON(pages);
 
 				/* prepare async write request */
-				offset = (u64)page_offset(page);
+				offset = (u64) page_offset(page);
 				len = wsize;
-				req = ceph_writepages_osd_request(inode,
-							offset, &len, snapc,
-							num_ops);
+				req = ceph_osdc_new_request(&fsc->client->osdc,
+					    &ci->i_layout,
+					    ceph_vino(inode),
+					    offset, &len,
+					    CEPH_OSD_OP_WRITE,
+					    CEPH_OSD_FLAG_WRITE |
+						    CEPH_OSD_FLAG_ONDISK,
+					    snapc, do_sync,
+					    ci->i_truncate_seq,
+					    ci->i_truncate_size,
+					    &inode->i_mtime, true, 1, 0);
 
 				if (IS_ERR(req)) {
 					rc = PTR_ERR(req);

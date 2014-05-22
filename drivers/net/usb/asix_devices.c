@@ -20,7 +20,137 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include "asix.h"
+// #define	DEBUG			// error path messages, extra info
+// #define	VERBOSE			// more; success messages
+
+#include <linux/module.h>
+#include <linux/kmod.h>
+#include <linux/init.h>
+#include <linux/netdevice.h>
+#include <linux/etherdevice.h>
+#include <linux/ethtool.h>
+#include <linux/workqueue.h>
+#include <linux/mii.h>
+#include <linux/usb.h>
+#include <linux/crc32.h>
+#include <linux/usb/usbnet.h>
+#include <linux/slab.h>
+#include <linux/if_vlan.h>
+
+#define DRIVER_VERSION "22-Dec-2011"
+#define DRIVER_NAME "asix"
+
+/* ASIX AX8817X based USB 2.0 Ethernet Devices */
+
+#define AX_CMD_SET_SW_MII		0x06
+#define AX_CMD_READ_MII_REG		0x07
+#define AX_CMD_WRITE_MII_REG		0x08
+#define AX_CMD_SET_HW_MII		0x0a
+#define AX_CMD_READ_EEPROM		0x0b
+#define AX_CMD_WRITE_EEPROM		0x0c
+#define AX_CMD_WRITE_ENABLE		0x0d
+#define AX_CMD_WRITE_DISABLE		0x0e
+#define AX_CMD_READ_RX_CTL		0x0f
+#define AX_CMD_WRITE_RX_CTL		0x10
+#define AX_CMD_READ_IPG012		0x11
+#define AX_CMD_WRITE_IPG0		0x12
+#define AX_CMD_WRITE_IPG1		0x13
+#define AX_CMD_READ_NODE_ID		0x13
+#define AX_CMD_WRITE_NODE_ID		0x14
+#define AX_CMD_WRITE_IPG2		0x14
+#define AX_CMD_WRITE_MULTI_FILTER	0x16
+#define AX88172_CMD_READ_NODE_ID	0x17
+#define AX_CMD_READ_PHY_ID		0x19
+#define AX_CMD_READ_MEDIUM_STATUS	0x1a
+#define AX_CMD_WRITE_MEDIUM_MODE	0x1b
+#define AX_CMD_READ_MONITOR_MODE	0x1c
+#define AX_CMD_WRITE_MONITOR_MODE	0x1d
+#define AX_CMD_READ_GPIOS		0x1e
+#define AX_CMD_WRITE_GPIOS		0x1f
+#define AX_CMD_SW_RESET			0x20
+#define AX_CMD_SW_PHY_STATUS		0x21
+#define AX_CMD_SW_PHY_SELECT		0x22
+
+#define AX_MONITOR_MODE			0x01
+#define AX_MONITOR_LINK			0x02
+#define AX_MONITOR_MAGIC		0x04
+#define AX_MONITOR_HSFS			0x10
+
+/* AX88172 Medium Status Register values */
+#define AX88172_MEDIUM_FD		0x02
+#define AX88172_MEDIUM_TX		0x04
+#define AX88172_MEDIUM_FC		0x10
+#define AX88172_MEDIUM_DEFAULT \
+		( AX88172_MEDIUM_FD | AX88172_MEDIUM_TX | AX88172_MEDIUM_FC )
+
+#define AX_MCAST_FILTER_SIZE		8
+#define AX_MAX_MCAST			64
+
+#define AX_SWRESET_CLEAR		0x00
+#define AX_SWRESET_RR			0x01
+#define AX_SWRESET_RT			0x02
+#define AX_SWRESET_PRTE			0x04
+#define AX_SWRESET_PRL			0x08
+#define AX_SWRESET_BZ			0x10
+#define AX_SWRESET_IPRL			0x20
+#define AX_SWRESET_IPPD			0x40
+
+#define AX88772_IPG0_DEFAULT		0x15
+#define AX88772_IPG1_DEFAULT		0x0c
+#define AX88772_IPG2_DEFAULT		0x12
+
+/* AX88772 & AX88178 Medium Mode Register */
+#define AX_MEDIUM_PF		0x0080
+#define AX_MEDIUM_JFE		0x0040
+#define AX_MEDIUM_TFC		0x0020
+#define AX_MEDIUM_RFC		0x0010
+#define AX_MEDIUM_ENCK		0x0008
+#define AX_MEDIUM_AC		0x0004
+#define AX_MEDIUM_FD		0x0002
+#define AX_MEDIUM_GM		0x0001
+#define AX_MEDIUM_SM		0x1000
+#define AX_MEDIUM_SBP		0x0800
+#define AX_MEDIUM_PS		0x0200
+#define AX_MEDIUM_RE		0x0100
+
+#define AX88178_MEDIUM_DEFAULT	\
+	(AX_MEDIUM_PS | AX_MEDIUM_FD | AX_MEDIUM_AC | \
+	 AX_MEDIUM_RFC | AX_MEDIUM_TFC | AX_MEDIUM_JFE | \
+	 AX_MEDIUM_RE)
+
+#define AX88772_MEDIUM_DEFAULT	\
+	(AX_MEDIUM_FD | AX_MEDIUM_RFC | \
+	 AX_MEDIUM_TFC | AX_MEDIUM_PS | \
+	 AX_MEDIUM_AC | AX_MEDIUM_RE)
+
+/* AX88772 & AX88178 RX_CTL values */
+#define AX_RX_CTL_SO		0x0080
+#define AX_RX_CTL_AP		0x0020
+#define AX_RX_CTL_AM		0x0010
+#define AX_RX_CTL_AB		0x0008
+#define AX_RX_CTL_SEP		0x0004
+#define AX_RX_CTL_AMALL		0x0002
+#define AX_RX_CTL_PRO		0x0001
+#define AX_RX_CTL_MFB_2048	0x0000
+#define AX_RX_CTL_MFB_4096	0x0100
+#define AX_RX_CTL_MFB_8192	0x0200
+#define AX_RX_CTL_MFB_16384	0x0300
+
+#define AX_DEFAULT_RX_CTL	(AX_RX_CTL_SO | AX_RX_CTL_AB)
+
+/* GPIO 0 .. 2 toggles */
+#define AX_GPIO_GPO0EN		0x01	/* GPIO0 Output enable */
+#define AX_GPIO_GPO_0		0x02	/* GPIO0 Output value */
+#define AX_GPIO_GPO1EN		0x04	/* GPIO1 Output enable */
+#define AX_GPIO_GPO_1		0x08	/* GPIO1 Output value */
+#define AX_GPIO_GPO2EN		0x10	/* GPIO2 Output enable */
+#define AX_GPIO_GPO_2		0x20	/* GPIO2 Output value */
+#define AX_GPIO_RESERVED	0x40	/* Reserved */
+#define AX_GPIO_RSE		0x80	/* Reload serial EEPROM */
+
+#define AX_EEPROM_MAGIC		0xdeadbeef
+#define AX88172_EEPROM_LEN	0x40
+#define AX88772_EEPROM_LEN	0xff
 
 #define PHY_MODE_MARVELL	0x0000
 #define MII_MARVELL_LED_CTRL	0x0018
@@ -43,6 +173,209 @@ struct ax88172_int_data {
 	u8 status;
 	__le16 res3;
 } __packed;
+
+static int asix_read_cmd(struct usbnet *dev, u8 cmd, u16 value, u16 index,
+			    u16 size, void *data)
+{
+	void *buf;
+	int err = -ENOMEM;
+
+	netdev_dbg(dev->net, "asix_read_cmd() cmd=0x%02x value=0x%04x index=0x%04x size=%d\n",
+		   cmd, value, index, size);
+
+	buf = kmalloc(size, GFP_KERNEL);
+	if (!buf)
+		goto out;
+
+	err = usb_control_msg(
+		dev->udev,
+		usb_rcvctrlpipe(dev->udev, 0),
+		cmd,
+		USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
+		value,
+		index,
+		buf,
+		size,
+		USB_CTRL_GET_TIMEOUT);
+	if (err == size)
+		memcpy(data, buf, size);
+	else if (err >= 0)
+		err = -EINVAL;
+	kfree(buf);
+
+out:
+	return err;
+}
+
+static int asix_write_cmd(struct usbnet *dev, u8 cmd, u16 value, u16 index,
+			     u16 size, void *data)
+{
+	void *buf = NULL;
+	int err = -ENOMEM;
+
+	netdev_dbg(dev->net, "asix_write_cmd() cmd=0x%02x value=0x%04x index=0x%04x size=%d\n",
+		   cmd, value, index, size);
+
+	if (data) {
+		buf = kmemdup(data, size, GFP_KERNEL);
+		if (!buf)
+			goto out;
+	}
+
+	err = usb_control_msg(
+		dev->udev,
+		usb_sndctrlpipe(dev->udev, 0),
+		cmd,
+		USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
+		value,
+		index,
+		buf,
+		size,
+		USB_CTRL_SET_TIMEOUT);
+	kfree(buf);
+
+out:
+	return err;
+}
+
+static void asix_async_cmd_callback(struct urb *urb)
+{
+	struct usb_ctrlrequest *req = (struct usb_ctrlrequest *)urb->context;
+	int status = urb->status;
+
+	if (status < 0)
+		printk(KERN_DEBUG "asix_async_cmd_callback() failed with %d",
+			status);
+
+	kfree(req);
+	usb_free_urb(urb);
+}
+
+static void
+asix_write_cmd_async(struct usbnet *dev, u8 cmd, u16 value, u16 index,
+				    u16 size, void *data)
+{
+	struct usb_ctrlrequest *req;
+	int status;
+	struct urb *urb;
+
+	netdev_dbg(dev->net, "asix_write_cmd_async() cmd=0x%02x value=0x%04x index=0x%04x size=%d\n",
+		   cmd, value, index, size);
+
+	urb = usb_alloc_urb(0, GFP_ATOMIC);
+	if (!urb) {
+		netdev_err(dev->net, "Error allocating URB in write_cmd_async!\n");
+		return;
+	}
+
+	req = kmalloc(sizeof(struct usb_ctrlrequest), GFP_ATOMIC);
+	if (!req) {
+		netdev_err(dev->net, "Failed to allocate memory for control request\n");
+		usb_free_urb(urb);
+		return;
+	}
+
+	req->bRequestType = USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_DEVICE;
+	req->bRequest = cmd;
+	req->wValue = cpu_to_le16(value);
+	req->wIndex = cpu_to_le16(index);
+	req->wLength = cpu_to_le16(size);
+
+	usb_fill_control_urb(urb, dev->udev,
+			     usb_sndctrlpipe(dev->udev, 0),
+			     (void *)req, data, size,
+			     asix_async_cmd_callback, req);
+
+	status = usb_submit_urb(urb, GFP_ATOMIC);
+	if (status < 0) {
+		netdev_err(dev->net, "Error submitting the control message: status=%d\n",
+			   status);
+		kfree(req);
+		usb_free_urb(urb);
+	}
+}
+
+static int asix_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
+{
+	int offset = 0;
+
+	while (offset + sizeof(u32) < skb->len) {
+		struct sk_buff *ax_skb;
+		u16 size;
+		u32 header = get_unaligned_le32(skb->data + offset);
+
+		offset += sizeof(u32);
+
+		/* get the packet length */
+		size = (u16) (header & 0x7ff);
+		if (size != ((~header >> 16) & 0x07ff)) {
+			netdev_err(dev->net, "asix_rx_fixup() Bad Header Length\n");
+			return 0;
+		}
+
+		if ((size > dev->net->mtu + ETH_HLEN + VLAN_HLEN) ||
+		    (size + offset > skb->len)) {
+			netdev_err(dev->net, "asix_rx_fixup() Bad RX Length %d\n",
+				   size);
+			return 0;
+		}
+		ax_skb = netdev_alloc_skb_ip_align(dev->net, size);
+		if (!ax_skb)
+			return 0;
+
+		skb_put(ax_skb, size);
+		memcpy(ax_skb->data, skb->data + offset, size);
+		usbnet_skb_return(dev, ax_skb);
+
+		offset += (size + 1) & 0xfffe;
+	}
+
+	if (skb->len != offset) {
+		netdev_err(dev->net, "asix_rx_fixup() Bad SKB Length %d\n",
+			   skb->len);
+		return 0;
+	}
+	return 1;
+}
+
+static struct sk_buff *asix_tx_fixup(struct usbnet *dev, struct sk_buff *skb,
+					gfp_t flags)
+{
+	int padlen;
+	int headroom = skb_headroom(skb);
+	int tailroom = skb_tailroom(skb);
+	u32 packet_len;
+	u32 padbytes = 0xffff0000;
+
+	padlen = ((skb->len + 4) & (dev->maxpacket - 1)) ? 0 : 4;
+
+	if ((!skb_cloned(skb)) &&
+	    ((headroom + tailroom) >= (4 + padlen))) {
+		if ((headroom < 4) || (tailroom < padlen)) {
+			skb->data = memmove(skb->head + 4, skb->data, skb->len);
+			skb_set_tail_pointer(skb, skb->len);
+		}
+	} else {
+		struct sk_buff *skb2;
+		skb2 = skb_copy_expand(skb, 4, padlen, flags);
+		dev_kfree_skb_any(skb);
+		skb = skb2;
+		if (!skb)
+			return NULL;
+	}
+
+	skb_push(skb, 4);
+	packet_len = (((skb->len - 4) ^ 0x0000ffff) << 16) + (skb->len - 4);
+	cpu_to_le32s(&packet_len);
+	skb_copy_to_linear_data(skb, &packet_len, sizeof(packet_len));
+
+	if (padlen) {
+		cpu_to_le32s(&padbytes);
+		memcpy(skb_tail_pointer(skb), &padbytes, sizeof(padbytes));
+		skb_put(skb, sizeof(padbytes));
+	}
+	return skb;
+}
 
 static void asix_status(struct usbnet *dev, struct urb *urb)
 {

@@ -1163,6 +1163,60 @@ int drm_mode_group_init_legacy_group(struct drm_device *dev,
 EXPORT_SYMBOL(drm_mode_group_init_legacy_group);
 
 /**
+ * drm_mode_config_cleanup - free up DRM mode_config info
+ * @dev: DRM device
+ *
+ * LOCKING:
+ * Caller must hold mode config lock.
+ *
+ * Free up all the connectors and CRTCs associated with this DRM device, then
+ * free up the framebuffers and associated buffer objects.
+ *
+ * FIXME: cleanup any dangling user buffer objects too
+ */
+void drm_mode_config_cleanup(struct drm_device *dev)
+{
+	struct drm_connector *connector, *ot;
+	struct drm_crtc *crtc, *ct;
+	struct drm_encoder *encoder, *enct;
+	struct drm_framebuffer *fb, *fbt;
+	struct drm_property *property, *pt;
+	struct drm_plane *plane, *plt;
+
+	list_for_each_entry_safe(encoder, enct, &dev->mode_config.encoder_list,
+				 head) {
+		encoder->funcs->destroy(encoder);
+	}
+
+	list_for_each_entry_safe(connector, ot,
+				 &dev->mode_config.connector_list, head) {
+		connector->funcs->destroy(connector);
+	}
+
+	list_for_each_entry_safe(property, pt, &dev->mode_config.property_list,
+				 head) {
+		drm_property_destroy(dev, property);
+	}
+
+	list_for_each_entry_safe(fb, fbt, &dev->mode_config.fb_list, head) {
+		fb->funcs->destroy(fb);
+	}
+
+	list_for_each_entry_safe(plane, plt, &dev->mode_config.plane_list,
+				 head) {
+		plane->funcs->destroy(plane);
+	}
+
+	list_for_each_entry_safe(crtc, ct, &dev->mode_config.crtc_list, head) {
+		crtc->funcs->destroy(crtc);
+	}
+
+	idr_remove_all(&dev->mode_config.crtc_idr);
+	idr_destroy(&dev->mode_config.crtc_idr);
+}
+EXPORT_SYMBOL(drm_mode_config_cleanup);
+
+/**
  * drm_crtc_convert_to_umode - convert a drm_display_mode into a modeinfo
  * @out: drm_mode_modeinfo struct to return to the user
  * @in: drm_display_mode to use

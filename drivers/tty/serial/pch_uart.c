@@ -1040,10 +1040,15 @@ static unsigned int dma_handle_tx(struct eg20t_port *priv)
 
 static void pch_uart_err_ir(struct eg20t_port *priv, unsigned int lsr)
 {
+	u8 fcr = ioread8(priv->membase + UART_FCR);
 	struct uart_port *port = &priv->port;
 	struct tty_struct *tty = tty_port_tty_get(&port->state->port);
 	char   *error_msg[5] = {};
 	int    i = 0;
+
+	/* Reset FIFO */
+	fcr |= UART_FCR_CLEAR_RCVR;
+	iowrite8(fcr, priv->membase + UART_FCR);
 
 	if (lsr & PCH_UART_LSR_ERR)
 		error_msg[i++] = "Error data in FIFO\n";
@@ -1234,6 +1239,7 @@ static void pch_uart_stop_rx(struct uart_port *port)
 	priv->start_rx = 0;
 	pch_uart_hal_disable_interrupt(priv, PCH_UART_HAL_RX_INT |
 					     PCH_UART_HAL_RX_ERR_INT);
+	priv->int_dis_flag = 1;
 }
 
 /* Enable the modem status interrupts. */
@@ -1632,8 +1638,7 @@ pch_console_write(struct console *co, const char *s, unsigned int count)
 
 	local_irq_save(flags);
 	if (priv->port.sysrq) {
-		/* call to uart_handle_sysrq_char already took the priv lock */
-		priv_locked = 0;
+		spin_lock(&priv->lock);
 		/* serial8250_handle_port() already took the port lock */
 		port_locked = 0;
 	} else if (oops_in_progress) {

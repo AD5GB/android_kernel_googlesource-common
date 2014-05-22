@@ -643,7 +643,10 @@ static void shmem_evict_inode(struct inode *inode)
 	} else
 		kfree(info->symlink);
 
-	simple_xattrs_free(&info->xattrs);
+	list_for_each_entry_safe(xattr, nxattr, &info->xattr_list, list) {
+		kfree(xattr->name);
+		kfree(xattr);
+	}
 	WARN_ON(inode->i_blocks);
 	shmem_free_inode(inode->i_sb);
 	clear_inode(inode);
@@ -2950,6 +2953,7 @@ void shmem_set_file(struct vm_area_struct *vma, struct file *file)
 		fput(vma->vm_file);
 	vma->vm_file = file;
 	vma->vm_ops = &shmem_vm_ops;
+	vma->vm_flags |= VM_CAN_NONLINEAR;
 }
 
 /**

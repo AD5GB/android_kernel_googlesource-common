@@ -450,26 +450,10 @@ static struct dmi_system_id video_dmi_table[] __initdata = {
 	},
 	{
 	 .callback = video_ignore_initial_backlight,
-	 .ident = "HP Pavilion dm4",
-	 .matches = {
-		DMI_MATCH(DMI_BOARD_VENDOR, "Hewlett-Packard"),
-		DMI_MATCH(DMI_PRODUCT_NAME, "HP Pavilion dm4 Notebook PC"),
-		},
-	},
-	{
-	 .callback = video_ignore_initial_backlight,
 	 .ident = "HP Pavilion g6 Notebook PC",
 	 .matches = {
 		 DMI_MATCH(DMI_BOARD_VENDOR, "Hewlett-Packard"),
 		 DMI_MATCH(DMI_PRODUCT_NAME, "HP Pavilion g6 Notebook PC"),
-		},
-	},
-	{
-	 .callback = video_ignore_initial_backlight,
-	 .ident = "HP 1000 Notebook PC",
-	 .matches = {
-		DMI_MATCH(DMI_BOARD_VENDOR, "Hewlett-Packard"),
-		DMI_MATCH(DMI_PRODUCT_NAME, "HP 1000 Notebook PC"),
 		},
 	},
 	{
@@ -1868,7 +1852,8 @@ static int __init is_i740(struct pci_dev *dev)
 
 static int __init intel_opregion_present(void)
 {
-	int opregion = 0;
+	int i915 = 0;
+#if defined(CONFIG_DRM_I915) || defined(CONFIG_DRM_I915_MODULE)
 	struct pci_dev *dev = NULL;
 	u32 address;
 
@@ -1883,9 +1868,10 @@ static int __init intel_opregion_present(void)
 		pci_read_config_dword(dev, 0xfc, &address);
 		if (!address)
 			continue;
-		opregion = 1;
+		i915 = 1;
 	}
-	return opregion;
+#endif
+	return i915;
 }
 
 int acpi_video_register(void)

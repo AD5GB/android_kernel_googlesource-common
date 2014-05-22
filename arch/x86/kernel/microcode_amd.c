@@ -223,9 +223,20 @@ static int apply_microcode_amd(int cpu)
 	struct ucode_patch *p;
 	u32 rev, dummy;
 
-	BUG_ON(raw_smp_processor_id() != cpu);
+/*
+ * we signal a good patch is found by returning its size > 0
+ */
+static int get_matching_microcode(int cpu, const u8 *ucode_ptr,
+				  unsigned int leftover_size, int rev,
+				  unsigned int *current_size)
+{
+	struct microcode_header_amd *mc_hdr;
+	unsigned int actual_size, patch_size;
+	u16 equiv_cpu_id;
 
-	uci = ucode_cpu_info + cpu;
+	/* size of the current patch we're staring at */
+	patch_size = *(u32 *)(ucode_ptr + 4);
+	*current_size = patch_size + SECTION_HDR_SIZE;
 
 	p = find_patch(cpu);
 	if (!p)
@@ -241,6 +252,39 @@ static int apply_microcode_amd(int cpu)
 		c->microcode = rev;
 		return 0;
 	}
+
+	if (mc_hdr->patch_id <= rev)
+		return 0;
+
+	/*
+	 * now that the header looks sane, verify its size
+	 */
+	actual_size = verify_ucode_size(cpu, patch_size, leftover_size);
+	if (!actual_size)
+		return 0;
+
+	/* clear the patch buffer */
+	memset(patch, 0, PAGE_SIZE);
+
+	/* all looks ok, get the binary patch */
+	get_ucode_data(patch, ucode_ptr + SECTION_HDR_SIZE, actual_size);
+
+	return actual_size;
+}
+
+static int apply_microcode_amd(int cpu)
+{
+	u32 rev, dummy;
+	int cpu_num = raw_smp_processor_id();
+	struct ucode_cpu_info *uci = ucode_cpu_info + cpu_num;
+	struct microcode_amd *mc_amd = uci->mc;
+	struct cpuinfo_x86 *c = &cpu_data(cpu);
+
+	/* We should bind the task to the CPU */
+	BUG_ON(cpu_num != cpu);
+
+	if (mc_amd == NULL)
+		return 0;
 
 	wrmsrl(MSR_AMD64_PATCH_LOADER, (u64)(long)&mc_amd->hdr.data_code);
 

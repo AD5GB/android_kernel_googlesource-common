@@ -678,6 +678,7 @@ restart:
 			case NETDEV_JOIN:
 			case NETDEV_UNREGISTER:
 				/*
+				 * we might sleep in __netpoll_cleanup()
 				 * rtnl_lock already held
 				 * we might sleep in __netpoll_cleanup()
 				 */

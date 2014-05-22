@@ -1245,10 +1245,10 @@ static void hdmi_present_sense(struct hdmi_spec_per_pin *per_pin, int repoll)
 				eld->eld_valid = false;
 		}
 
-		if (eld->eld_valid) {
-			snd_hdmi_show_eld(&eld->info);
-			update_eld = true;
-		}
+	eld->eld_valid = false;
+	if (eld_valid) {
+		if (!snd_hdmi_get_eld(eld, codec, pin_nid))
+			snd_hdmi_show_eld(eld);
 		else if (repoll) {
 			queue_delayed_work(codec->bus->workq,
 					   &per_pin->work,
@@ -1444,14 +1444,17 @@ static int generic_hdmi_playback_pcm_prepare(struct hda_pcm_stream *hinfo,
 	hda_nid_t cvt_nid = hinfo->nid;
 	struct hdmi_spec *spec = codec->spec;
 	int pin_idx = hinfo_to_pin_index(spec, hinfo);
-	hda_nid_t pin_nid = get_pin(spec, pin_idx)->pin_nid;
-	bool non_pcm;
-
-	non_pcm = check_non_pcm_per_cvt(codec, cvt_nid);
+	hda_nid_t pin_nid = spec->pins[pin_idx].pin_nid;
+	int pinctl;
 
 	hdmi_set_channel_count(codec, cvt_nid, substream->runtime->channels);
 
 	hdmi_setup_audio_infoframe(codec, pin_idx, non_pcm, substream);
+
+	pinctl = snd_hda_codec_read(codec, pin_nid, 0,
+				    AC_VERB_GET_PIN_WIDGET_CONTROL, 0);
+	snd_hda_codec_write(codec, pin_nid, 0,
+			    AC_VERB_SET_PIN_WIDGET_CONTROL, pinctl | PIN_OUT);
 
 	return hdmi_setup_stream(codec, cvt_nid, pin_nid, stream_tag, format);
 }

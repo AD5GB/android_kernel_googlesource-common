@@ -202,15 +202,12 @@ int rproc_alloc_vring(struct rproc_vdev *rvdev, int i)
 	/* actual size of vring (in bytes) */
 	size = PAGE_ALIGN(vring_size(rvring->len, rvring->align));
 
-	/*
-	 * Allocate non-cacheable memory for the vring. In the future
-	 * this call will also configure the IOMMU for us
-	 */
-	va = dma_alloc_coherent(dev->parent, size, &dma, GFP_KERNEL);
-	if (!va) {
-		dev_err(dev->parent, "dma_alloc_coherent failed\n");
-		return -EINVAL;
-	}
+		if (offset + filesz > len) {
+			dev_err(dev, "truncated fw: need 0x%x avail 0x%zx\n",
+					offset + filesz, len);
+			ret = -EINVAL;
+			break;
+		}
 
 	/*
 	 * Assign an rproc-wide unique index for this vring
@@ -802,6 +799,8 @@ static int rproc_fw_boot(struct rproc *rproc, const struct firmware *fw)
 	if (ret)
 		return ret;
 
+	ehdr = (struct elf32_hdr *)fw->data;
+
 	dev_info(dev, "Booting fw image %s, size %zd\n", name, fw->size);
 
 	/*
@@ -817,15 +816,8 @@ static int rproc_fw_boot(struct rproc *rproc, const struct firmware *fw)
 	rproc->bootaddr = rproc_get_boot_addr(rproc, fw);
 
 	/* look for the resource table */
-	table = rproc_find_rsc_table(rproc, fw, &tablesz);
+	table = rproc_find_rsc_table(rproc, fw->data, fw->size, &tablesz);
 	if (!table) {
-		ret = -EINVAL;
-		goto clean_up;
-	}
-
-	/* Verify that resource table in loaded fw is unchanged */
-	if (rproc->table_csum != crc32(0, table, tablesz)) {
-		dev_err(dev, "resource checksum failed, fw changed?\n");
 		ret = -EINVAL;
 		goto clean_up;
 	}

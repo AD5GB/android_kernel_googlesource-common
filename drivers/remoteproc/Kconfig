@@ -3,16 +3,14 @@ menu "Remoteproc drivers"
 # REMOTEPROC gets selected by whoever wants it
 config REMOTEPROC
 	tristate
-	depends on HAS_DMA
-	select CRC32
-	select FW_LOADER
+	depends on EXPERIMENTAL
+	select FW_CONFIG
 	select VIRTIO
-	select VIRTUALIZATION
 
 config OMAP_REMOTEPROC
 	tristate "OMAP remoteproc support"
-	depends on HAS_DMA
-	depends on ARCH_OMAP4 || SOC_OMAP5
+	depends on EXPERIMENTAL
+	depends on ARCH_OMAP4
 	depends on OMAP_IOMMU
 	depends on OMAP_MBOX_FWK
 	select REMOTEPROC

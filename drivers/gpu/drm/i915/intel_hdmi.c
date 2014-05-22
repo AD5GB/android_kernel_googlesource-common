@@ -157,16 +157,13 @@ static void g4x_write_infoframe(struct drm_encoder *encoder,
 		I915_WRITE(VIDEO_DIP_DATA, *data);
 		data++;
 	}
-	/* Write every possible data byte to force correct ECC calculation. */
-	for (; i < VIDEO_DIP_DATA_SIZE; i += 4)
-		I915_WRITE(VIDEO_DIP_DATA, 0);
 	mmiowb();
 
 	val |= g4x_infoframe_enable(frame);
 	val &= ~VIDEO_DIP_FREQ_MASK;
 	val |= VIDEO_DIP_FREQ_VSYNC;
 
-	I915_WRITE(VIDEO_DIP_CTL, val);
+	I915_WRITE(VIDEO_DIP_CTL, VIDEO_DIP_ENABLE | val | port | flags);
 	POSTING_READ(VIDEO_DIP_CTL);
 }
 
@@ -236,16 +233,13 @@ static void cpt_write_infoframe(struct drm_encoder *encoder,
 		I915_WRITE(TVIDEO_DIP_DATA(intel_crtc->pipe), *data);
 		data++;
 	}
-	/* Write every possible data byte to force correct ECC calculation. */
-	for (; i < VIDEO_DIP_DATA_SIZE; i += 4)
-		I915_WRITE(TVIDEO_DIP_DATA(intel_crtc->pipe), 0);
 	mmiowb();
 
 	val |= g4x_infoframe_enable(frame);
 	val &= ~VIDEO_DIP_FREQ_MASK;
 	val |= VIDEO_DIP_FREQ_VSYNC;
 
-	I915_WRITE(reg, val);
+	I915_WRITE(reg, VIDEO_DIP_ENABLE | val | flags);
 	POSTING_READ(reg);
 }
 
@@ -667,7 +661,7 @@ static void intel_enable_hdmi(struct intel_encoder *encoder)
 	u32 temp;
 	u32 enable_bits = SDVO_ENABLE;
 
-	if (intel_hdmi->has_audio)
+	if (intel_hdmi->has_audio || mode != DRM_MODE_DPMS_ON)
 		enable_bits |= SDVO_AUDIO_ENABLE;
 
 	temp = I915_READ(intel_hdmi->hdmi_reg);
@@ -1029,21 +1023,18 @@ void intel_hdmi_init_connector(struct intel_digital_port *intel_dig_port,
 		BUG();
 	}
 
-	if (IS_VALLEYVIEW(dev)) {
-		intel_hdmi->write_infoframe = vlv_write_infoframe;
-		intel_hdmi->set_infoframes = vlv_set_infoframes;
-	} else if (!HAS_PCH_SPLIT(dev)) {
-		intel_hdmi->write_infoframe = g4x_write_infoframe;
-		intel_hdmi->set_infoframes = g4x_set_infoframes;
-	} else if (HAS_DDI(dev)) {
-		intel_hdmi->write_infoframe = hsw_write_infoframe;
-		intel_hdmi->set_infoframes = hsw_set_infoframes;
-	} else if (HAS_PCH_IBX(dev)) {
-		intel_hdmi->write_infoframe = ibx_write_infoframe;
-		intel_hdmi->set_infoframes = ibx_set_infoframes;
+	intel_hdmi->sdvox_reg = sdvox_reg;
+
+	if (!HAS_PCH_SPLIT(dev)) {
+		intel_hdmi->write_infoframe = i9xx_write_infoframe;
+		I915_WRITE(VIDEO_DIP_CTL, 0);
+		POSTING_READ(VIDEO_DIP_CTL);
 	} else {
-		intel_hdmi->write_infoframe = cpt_write_infoframe;
-		intel_hdmi->set_infoframes = cpt_set_infoframes;
+		intel_hdmi->write_infoframe = ironlake_write_infoframe;
+		for_each_pipe(i) {
+			I915_WRITE(TVIDEO_DIP_CTL(i), 0);
+			POSTING_READ(TVIDEO_DIP_CTL(i));
+		}
 	}
 
 	if (HAS_DDI(dev))

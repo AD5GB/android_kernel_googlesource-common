@@ -1856,6 +1856,7 @@ done:
 		lock_sock(sk);
 	}
 
+	splice_shrink_spd(&spd);
 	return ret;
 }
 

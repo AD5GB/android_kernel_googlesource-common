@@ -214,9 +214,9 @@ static long blimit = 10;	/* Maximum callbacks per rcu_do_batch. */
 static long qhimark = 10000;	/* If this many pending, ignore blimit. */
 static long qlowmark = 100;	/* Once only this many pending, use blimit. */
 
-module_param(blimit, long, 0444);
-module_param(qhimark, long, 0444);
-module_param(qlowmark, long, 0444);
+module_param(blimit, long, 0);
+module_param(qhimark, long, 0);
+module_param(qlowmark, long, 0);
 
 static ulong jiffies_till_first_fqs = RCU_JIFFIES_TILL_FORCE_QS;
 static ulong jiffies_till_next_fqs = RCU_JIFFIES_TILL_FORCE_QS;
@@ -309,22 +309,9 @@ cpu_has_callbacks_ready_to_invoke(struct rcu_data *rdp)
 static int
 cpu_needs_another_gp(struct rcu_state *rsp, struct rcu_data *rdp)
 {
-	int i;
-
-	if (rcu_gp_in_progress(rsp))
-		return 0;  /* No, a grace period is already in progress. */
-	if (rcu_nocb_needs_gp(rsp))
-		return 1;  /* Yes, a no-CBs CPU needs one. */
-	if (!rdp->nxttail[RCU_NEXT_TAIL])
-		return 0;  /* No, this is a no-CBs (or offline) CPU. */
-	if (*rdp->nxttail[RCU_NEXT_READY_TAIL])
-		return 1;  /* Yes, this CPU has newly registered callbacks. */
-	for (i = RCU_WAIT_TAIL; i < RCU_NEXT_TAIL; i++)
-		if (rdp->nxttail[i - 1] != rdp->nxttail[i] &&
-		    ULONG_CMP_LT(ACCESS_ONCE(rsp->completed),
-				 rdp->nxtcompleted[i]))
-			return 1;  /* Yes, CBs for future grace period. */
-	return 0; /* No grace period needed. */
+	return *rdp->nxttail[RCU_DONE_TAIL +
+			     ACCESS_ONCE(rsp->completed) != rdp->completed] &&
+	       !rcu_gp_in_progress(rsp);
 }
 
 /*
@@ -2040,7 +2027,6 @@ static void rcu_do_batch(struct rcu_state *rsp, struct rcu_data *rdp)
 	unsigned long flags;
 	struct rcu_head *next, *list, **tail;
 	long bl, count, count_lazy;
-	int i;
 
 	/* If no callbacks are ready, just return. */
 	if (!cpu_has_callbacks_ready_to_invoke(rdp)) {

@@ -340,14 +340,20 @@ static int das08jr_do_wbits(struct comedi_device *dev,
 static void das08_ao_set_data(struct comedi_device *dev,
 			      unsigned int chan, unsigned int data)
 {
-	const struct das08_board_struct *thisboard = comedi_board(dev);
-	struct das08_private_struct *devpriv = dev->private;
-	unsigned char lsb;
-	unsigned char msb;
+	int n;
+	int lsb, msb;
+	int chan;
 
-	lsb = data & 0xff;
-	msb = (data >> 8) & 0xff;
-	if (thisboard->is_jr) {
+	lsb = data[0] & 0xff;
+	msb = (data[0] >> 8) & 0xff;
+
+	chan = CR_CHAN(insn->chanspec);
+
+	for (n = 0; n < insn->n; n++) {
+#if 0
+		outb(lsb, dev->iobase + devpriv->ao_offset_lsb[chan]);
+		outb(msb, dev->iobase + devpriv->ao_offset_msb[chan]);
+#else
 		outb(lsb, dev->iobase + DAS08JR_AO_LSB(chan));
 		outb(msb, dev->iobase + DAS08JR_AO_MSB(chan));
 		/* load DACs */

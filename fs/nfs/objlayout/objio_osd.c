@@ -491,7 +491,7 @@ static struct page *__r4w_get_page(void *priv, u64 offset, bool *uptodate)
 	struct address_space *mapping = wdata->header->inode->i_mapping;
 	pgoff_t index = offset / PAGE_SIZE;
 	struct page *page;
-	loff_t i_size = i_size_read(wdata->header->inode);
+	loff_t i_size = i_size_read(wdata->inode);
 
 	if (offset >= i_size) {
 		*uptodate = true;
@@ -499,7 +499,7 @@ static struct page *__r4w_get_page(void *priv, u64 offset, bool *uptodate)
 		return ZERO_PAGE(0);
 	}
 
-	page = find_get_page(mapping, index);
+	page = find_get_page(wdata->inode->i_mapping, index);
 	if (!page) {
 		page = find_or_create_page(mapping, index, GFP_NOFS);
 		if (unlikely(!page)) {

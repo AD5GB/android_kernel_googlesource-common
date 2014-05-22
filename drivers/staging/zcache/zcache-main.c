@@ -645,53 +645,12 @@ static int zcache_pampd_get_data_and_free(char *data, size_t *sizep, bool raw,
 					void *pampd, struct tmem_pool *pool,
 					struct tmem_oid *oid, uint32_t index)
 {
-	int ret = 0;
-	bool eph = !is_persistent(pool), zero_filled = false;
-	struct page *page = NULL;
-	unsigned int zsize, zpages;
-
-	BUG_ON(preemptible());
-	BUG_ON(pampd_is_remote(pampd));
-
-	if (pampd == (void *)ZERO_FILLED) {
-		handle_zero_filled_page(data);
-		zero_filled = true;
-		zsize = 0;
-		zpages = 1;
-		if (!raw)
-			*sizep = PAGE_SIZE;
-		dec_zcache_zero_filled_pages();
-		goto zero_fill;
-	}
-
-	if (raw)
-		ret = zbud_copy_from_zbud(data, (struct zbudref *)pampd,
-						sizep, eph);
-	else {
-		ret = zbud_decompress((struct page *)(data),
-					(struct zbudref *)pampd, eph,
-					zcache_decompress);
-		*sizep = PAGE_SIZE;
-	}
-	page = zbud_free_and_delist((struct zbudref *)pampd, eph,
-					&zsize, &zpages);
-zero_fill:
-	if (eph) {
-		if (page)
-			dec_zcache_eph_pageframes();
-		dec_zcache_eph_zpages(zpages);
-		dec_zcache_eph_zbytes(zsize);
-	} else {
-		if (page)
-			dec_zcache_pers_pageframes();
-		dec_zcache_pers_zpages(zpages);
-		dec_zcache_pers_zbytes(zsize);
-	}
-	if (!is_local_client(pool->client) && !zero_filled)
-		ramster_count_foreign_pages(eph, -1);
-	if (page && !zero_filled)
-		zcache_free_page(page);
-	return ret;
+	BUG_ON(!is_ephemeral(pool));
+	if (zbud_decompress((struct page *)(data), pampd) < 0)
+		return -EINVAL;
+	zbud_free_and_delist((struct zbud_hdr *)pampd);
+	atomic_dec(&zcache_curr_eph_pampd_count);
+	return 0;
 }
 
 /*

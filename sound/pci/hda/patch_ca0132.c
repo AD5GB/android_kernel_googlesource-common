@@ -689,11 +689,86 @@ enum dsp_download_state {
 	DSP_DOWNLOADED      = 2
 };
 
-/* retrieve parameters from hda format */
-#define get_hdafmt_chs(fmt)	(fmt & 0xf)
-#define get_hdafmt_bits(fmt)	((fmt >> 4) & 0x7)
-#define get_hdafmt_rate(fmt)	((fmt >> 8) & 0x7f)
-#define get_hdafmt_type(fmt)	((fmt >> 15) & 0x1)
+/*
+ * Duplicated from ca0110 codec
+ */
+
+static void init_output(struct hda_codec *codec, hda_nid_t pin, hda_nid_t dac)
+{
+	if (pin) {
+		snd_hda_codec_write(codec, pin, 0,
+				    AC_VERB_SET_PIN_WIDGET_CONTROL, PIN_HP);
+		if (get_wcaps(codec, pin) & AC_WCAP_OUT_AMP)
+			snd_hda_codec_write(codec, pin, 0,
+					    AC_VERB_SET_AMP_GAIN_MUTE,
+					    AMP_OUT_UNMUTE);
+	}
+	if (dac)
+		snd_hda_codec_write(codec, dac, 0,
+				    AC_VERB_SET_AMP_GAIN_MUTE, AMP_OUT_ZERO);
+}
+
+static void init_input(struct hda_codec *codec, hda_nid_t pin, hda_nid_t adc)
+{
+	if (pin) {
+		snd_hda_codec_write(codec, pin, 0,
+				    AC_VERB_SET_PIN_WIDGET_CONTROL,
+				    PIN_VREF80);
+		if (get_wcaps(codec, pin) & AC_WCAP_IN_AMP)
+			snd_hda_codec_write(codec, pin, 0,
+					    AC_VERB_SET_AMP_GAIN_MUTE,
+					    AMP_IN_UNMUTE(0));
+	}
+	if (adc)
+		snd_hda_codec_write(codec, adc, 0, AC_VERB_SET_AMP_GAIN_MUTE,
+				    AMP_IN_UNMUTE(0));
+}
+
+static char *dirstr[2] = { "Playback", "Capture" };
+
+static int _add_switch(struct hda_codec *codec, hda_nid_t nid, const char *pfx,
+		       int chan, int dir)
+{
+	char namestr[44];
+	int type = dir ? HDA_INPUT : HDA_OUTPUT;
+	struct snd_kcontrol_new knew =
+		HDA_CODEC_MUTE_MONO(namestr, nid, chan, 0, type);
+	if ((query_amp_caps(codec, nid, type) & AC_AMPCAP_MUTE) == 0) {
+		snd_printdd("Skipping '%s %s Switch' (no mute on node 0x%x)\n", pfx, dirstr[dir], nid);
+		return 0;
+	}
+	sprintf(namestr, "%s %s Switch", pfx, dirstr[dir]);
+	return snd_hda_ctl_add(codec, nid, snd_ctl_new1(&knew, codec));
+}
+
+static int _add_volume(struct hda_codec *codec, hda_nid_t nid, const char *pfx,
+		       int chan, int dir)
+{
+	char namestr[44];
+	int type = dir ? HDA_INPUT : HDA_OUTPUT;
+	struct snd_kcontrol_new knew =
+		HDA_CODEC_VOLUME_MONO(namestr, nid, chan, 0, type);
+	if ((query_amp_caps(codec, nid, type) & AC_AMPCAP_NUM_STEPS) == 0) {
+		snd_printdd("Skipping '%s %s Volume' (no amp on node 0x%x)\n", pfx, dirstr[dir], nid);
+		return 0;
+	}
+	sprintf(namestr, "%s %s Volume", pfx, dirstr[dir]);
+	return snd_hda_ctl_add(codec, nid, snd_ctl_new1(&knew, codec));
+}
+
+#define add_out_switch(codec, nid, pfx) _add_switch(codec, nid, pfx, 3, 0)
+#define add_out_volume(codec, nid, pfx) _add_volume(codec, nid, pfx, 3, 0)
+#define add_in_switch(codec, nid, pfx) _add_switch(codec, nid, pfx, 3, 1)
+#define add_in_volume(codec, nid, pfx) _add_volume(codec, nid, pfx, 3, 1)
+#define add_mono_switch(codec, nid, pfx, chan) \
+	_add_switch(codec, nid, pfx, chan, 0)
+#define add_mono_volume(codec, nid, pfx, chan) \
+	_add_volume(codec, nid, pfx, chan, 0)
+#define add_in_mono_switch(codec, nid, pfx, chan) \
+	_add_switch(codec, nid, pfx, chan, 1)
+#define add_in_mono_volume(codec, nid, pfx, chan) \
+	_add_volume(codec, nid, pfx, chan, 1)
+
 
 /*
  * CA0132 specific

@@ -51,9 +51,6 @@ ENTRY(cpu_v7_switch_mm)
 	lsr	r2, r2, #8			@ extract the PID
 	bfi	r1, r2, #8, #24			@ insert into new context ID
 #endif
-#ifdef CONFIG_ARM_ERRATA_754322
-	dsb
-#endif
 	mcr	p15, 0, r1, c13, c0, 1		@ set context ID
 	isb
 	mcr	p15, 0, r0, c2, c0, 0		@ set TTB 0

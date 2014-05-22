@@ -398,6 +398,26 @@ static struct vfsmount *autofs4_d_automount(struct path *path)
 			return ERR_PTR(status);
 		}
 	}
+done:
+	if (!(ino->flags & AUTOFS_INF_EXPIRING)) {
+		/*
+		 * Any needed mounting has been completed and the path
+		 * updated so clear DCACHE_NEED_AUTOMOUNT so we don't
+		 * call ->d_automount() on rootless multi-mounts since
+		 * it can lead to an incorrect ELOOP error return.
+		 *
+		 * Only clear DMANAGED_AUTOMOUNT for rootless multi-mounts and
+		 * symlinks as in all other cases the dentry will be covered by
+		 * an actual mount so ->d_automount() won't be called during
+		 * the follow.
+		 */
+		spin_lock(&dentry->d_lock);
+		if ((!d_mountpoint(dentry) &&
+		    !list_empty(&dentry->d_subdirs)) ||
+		    (dentry->d_inode && S_ISLNK(dentry->d_inode->i_mode)))
+			__managed_dentry_clear_automount(dentry);
+		spin_unlock(&dentry->d_lock);
+	}
 	spin_unlock(&sbi->fs_lock);
 done:
 	/* Mount succeeded, check if we ended up with a new dentry */

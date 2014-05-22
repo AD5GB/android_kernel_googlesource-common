@@ -370,22 +370,33 @@ void iwl_pcie_disable_ict(struct iwl_trans *trans);
 /*****************************************************
 * TX / HCMD
 ******************************************************/
-int iwl_pcie_tx_init(struct iwl_trans *trans);
-void iwl_pcie_tx_start(struct iwl_trans *trans, u32 scd_base_addr);
-int iwl_pcie_tx_stop(struct iwl_trans *trans);
-void iwl_pcie_tx_free(struct iwl_trans *trans);
-void iwl_trans_pcie_txq_enable(struct iwl_trans *trans, int txq_id, int fifo,
-			       int sta_id, int tid, int frame_limit, u16 ssn);
-void iwl_trans_pcie_txq_disable(struct iwl_trans *trans, int queue);
-int iwl_trans_pcie_tx(struct iwl_trans *trans, struct sk_buff *skb,
-		      struct iwl_device_cmd *dev_cmd, int txq_id);
-void iwl_pcie_txq_inc_wr_ptr(struct iwl_trans *trans, struct iwl_txq *txq);
-int iwl_trans_pcie_send_hcmd(struct iwl_trans *trans, struct iwl_host_cmd *cmd);
-void iwl_pcie_hcmd_complete(struct iwl_trans *trans,
-			    struct iwl_rx_cmd_buffer *rxb, int handler_status);
-void iwl_trans_pcie_reclaim(struct iwl_trans *trans, int txq_id, int ssn,
-			    struct sk_buff_head *skbs);
-void iwl_trans_pcie_tx_reset(struct iwl_trans *trans);
+void iwl_txq_update_write_ptr(struct iwl_trans *trans,
+			struct iwl_tx_queue *txq);
+int iwlagn_txq_attach_buf_to_tfd(struct iwl_trans *trans,
+				 struct iwl_tx_queue *txq,
+				 dma_addr_t addr, u16 len, u8 reset);
+int iwl_queue_init(struct iwl_queue *q, int count, int slots_num, u32 id);
+int iwl_trans_pcie_send_cmd(struct iwl_trans *trans, struct iwl_host_cmd *cmd);
+void iwl_tx_cmd_complete(struct iwl_trans *trans,
+			 struct iwl_rx_cmd_buffer *rxb, int handler_status);
+void iwl_trans_txq_update_byte_cnt_tbl(struct iwl_trans *trans,
+					   struct iwl_tx_queue *txq,
+					   u16 byte_cnt);
+int iwl_trans_pcie_tx_agg_disable(struct iwl_trans *trans,
+				  int sta_id, int tid);
+void iwl_trans_set_wr_ptrs(struct iwl_trans *trans, int txq_id, u32 index);
+void iwl_trans_tx_queue_set_status(struct iwl_trans *trans,
+			     struct iwl_tx_queue *txq,
+			     int tx_fifo_id, int scd_retry);
+int iwl_trans_pcie_tx_agg_alloc(struct iwl_trans *trans, int sta_id, int tid);
+void iwl_trans_pcie_tx_agg_setup(struct iwl_trans *trans,
+				 enum iwl_rxon_context_id ctx,
+				 int sta_id, int tid, int frame_limit, u16 ssn);
+void iwlagn_txq_free_tfd(struct iwl_trans *trans, struct iwl_tx_queue *txq,
+			 enum dma_data_direction dma_dir);
+int iwl_tx_queue_reclaim(struct iwl_trans *trans, int txq_id, int index,
+			 struct sk_buff_head *skbs);
+int iwl_queue_space(const struct iwl_queue *q);
 
 /*****************************************************
 * Error handling

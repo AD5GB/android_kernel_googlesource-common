@@ -370,8 +370,10 @@ target_emulate_set_target_port_groups(struct se_cmd *cmd)
 
 out:
 	transport_kunmap_data_sg(cmd);
-	if (!rc)
-		target_complete_cmd(cmd, GOOD);
+	if (!rc) {
+		task->task_scsi_status = GOOD;
+		transport_complete_task(task, 1);
+	}
 	return rc;
 }
 

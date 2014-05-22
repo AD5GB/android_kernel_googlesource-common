@@ -139,8 +139,15 @@ struct child {
 	struct btree_node *n;
 };
 
-static int init_child(struct dm_btree_info *info, struct dm_btree_value_type *vt,
-		      struct btree_node *parent,
+static struct dm_btree_value_type le64_type = {
+	.context = NULL,
+	.size = sizeof(__le64),
+	.inc = NULL,
+	.dec = NULL,
+	.equal = NULL
+};
+
+static int init_child(struct dm_btree_info *info, struct btree_node *parent,
 		      unsigned index, struct child *result)
 {
 	int r, inc;

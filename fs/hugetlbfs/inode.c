@@ -907,37 +907,19 @@ static int can_do_hugetlb_shm(void)
 	return capable(CAP_IPC_LOCK) || in_group_p(shm_group);
 }
 
-static int get_hstate_idx(int page_size_log)
-{
-	struct hstate *h = hstate_sizelog(page_size_log);
-
-	if (!h)
-		return -1;
-	return h - hstates;
-}
-
-static struct dentry_operations anon_ops = {
-	.d_dname = simple_dname
-};
-
 /*
  * Note that size should be aligned to proper hugepage size in caller side,
  * otherwise hugetlb_reserve_pages reserves one less hugepages than intended.
  */
 struct file *hugetlb_file_setup(const char *name, size_t size,
 				vm_flags_t acctflag, struct user_struct **user,
-				int creat_flags, int page_size_log)
+				int creat_flags)
 {
 	struct file *file = ERR_PTR(-ENOMEM);
 	struct inode *inode;
 	struct path path;
 	struct super_block *sb;
 	struct qstr quick_string;
-	int hstate_idx;
-
-	hstate_idx = get_hstate_idx(page_size_log);
-	if (hstate_idx < 0)
-		return ERR_PTR(-ENODEV);
 
 	*user = NULL;
 	if (!hugetlbfs_vfsmount[hstate_idx])
@@ -972,7 +954,7 @@ struct file *hugetlb_file_setup(const char *name, size_t size,
 	if (!inode)
 		goto out_dentry;
 
-	file = ERR_PTR(-ENOMEM);
+	error = -ENOMEM;
 	if (hugetlb_reserve_pages(inode, 0,
 			size >> huge_page_shift(hstate_inode(inode)), NULL,
 			acctflag))

@@ -204,10 +204,6 @@ static void free_fib_info_rcu(struct rcu_head *head)
 	change_nexthops(fi) {
 		if (nexthop_nh->nh_dev)
 			dev_put(nexthop_nh->nh_dev);
-		if (nexthop_nh->nh_exceptions)
-			free_nh_exceptions(nexthop_nh);
-		rt_fibinfo_free_cpus(nexthop_nh->nh_pcpu_rth_output);
-		rt_fibinfo_free(&nexthop_nh->nh_rth_input);
 	} endfor_nexthops(fi);
 
 	release_net(fi->fib_net);
@@ -223,12 +219,6 @@ void free_fib_info(struct fib_info *fi)
 		return;
 	}
 	fib_info_cnt--;
-#ifdef CONFIG_IP_ROUTE_CLASSID
-	change_nexthops(fi) {
-		if (nexthop_nh->nh_tclassid)
-			fi->fib_net->ipv4.fib_num_tclassid_users--;
-	} endfor_nexthops(fi);
-#endif
 	call_rcu(&fi->rcu, free_fib_info_rcu);
 }
 

@@ -435,6 +435,8 @@ mwifiex_wmm_init(struct mwifiex_adapter *adapter)
 		mwifiex_set_ba_params(priv);
 		mwifiex_reset_11n_rx_seq_num(priv);
 
+		mwifiex_reset_11n_rx_seq_num(priv);
+
 		atomic_set(&priv->wmm.tx_pkts_queued, 0);
 		atomic_set(&priv->wmm.highest_queued_prio, HIGH_PRIO_TID);
 	}

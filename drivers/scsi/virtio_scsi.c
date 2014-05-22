@@ -313,13 +313,8 @@ static int virtscsi_kick_event_all(struct virtio_scsi *vscsi)
 {
 	int i;
 
-	for (i = 0; i < VIRTIO_SCSI_EVENT_LEN; i++) {
-		vscsi->event_list[i].vscsi = vscsi;
-		virtscsi_kick_event(vscsi, &vscsi->event_list[i]);
-	}
-
-	return 0;
-}
+	for_each_sg(table->sgl, sg_elem, table->nents, i)
+		sg[idx++] = *sg_elem;
 
 static void virtscsi_cancel_event_work(struct virtio_scsi *vscsi)
 {

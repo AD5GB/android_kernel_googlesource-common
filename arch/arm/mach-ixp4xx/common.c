@@ -29,7 +29,6 @@
 #include <linux/io.h>
 #include <linux/export.h>
 #include <linux/gpio.h>
-#include <linux/cpu.h>
 
 #include <mach/udc.h>
 #include <mach/hardware.h>

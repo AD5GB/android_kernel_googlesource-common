@@ -252,18 +252,17 @@ void gfs2_trans_add_meta(struct gfs2_glock *gl, struct buffer_head *bh)
 	lock_buffer(bh);
 	gfs2_log_lock(sdp);
 	bd = bh->b_private;
-	if (bd == NULL) {
+	if (bd)
+		gfs2_assert(sdp, bd->bd_gl == gl);
+	else {
 		gfs2_log_unlock(sdp);
 		unlock_buffer(bh);
-		lock_page(bh->b_page);
-		if (bh->b_private == NULL)
-			bd = gfs2_alloc_bufdata(gl, bh, &gfs2_buf_lops);
-		unlock_page(bh->b_page);
+		gfs2_attach_bufdata(gl, bh, meta);
+		bd = bh->b_private;
 		lock_buffer(bh);
 		gfs2_log_lock(sdp);
 	}
-	gfs2_assert(sdp, bd->bd_gl == gl);
-	meta_lo_add(sdp, bd);
+	lops_add(sdp, &bd->bd_le);
 	gfs2_log_unlock(sdp);
 	unlock_buffer(bh);
 }

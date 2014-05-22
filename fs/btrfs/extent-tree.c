@@ -4834,19 +4834,73 @@ int btrfs_delalloc_reserve_metadata(struct inode *inode, u64 num_bytes)
 	csum_bytes = BTRFS_I(inode)->csum_bytes;
 	spin_unlock(&BTRFS_I(inode)->lock);
 
-	if (root->fs_info->quota_enabled) {
-		ret = btrfs_qgroup_reserve(root, num_bytes +
-					   nr_extents * root->leafsize);
-		if (ret)
-			goto out_fail;
-	}
-
 	ret = reserve_metadata_bytes(root, block_rsv, to_reserve, flush);
-	if (unlikely(ret)) {
-		if (root->fs_info->quota_enabled)
-			btrfs_qgroup_free(root, num_bytes +
-						nr_extents * root->leafsize);
-		goto out_fail;
+	if (ret) {
+		u64 to_free = 0;
+		unsigned dropped;
+
+		spin_lock(&BTRFS_I(inode)->lock);
+		dropped = drop_outstanding_extent(inode);
+		/*
+		 * If the inodes csum_bytes is the same as the original
+		 * csum_bytes then we know we haven't raced with any free()ers
+		 * so we can just reduce our inodes csum bytes and carry on.
+		 */
+		if (BTRFS_I(inode)->csum_bytes == csum_bytes) {
+			calc_csum_metadata_size(inode, num_bytes, 0);
+		} else {
+			u64 orig_csum_bytes = BTRFS_I(inode)->csum_bytes;
+			u64 bytes;
+
+			/*
+			 * This is tricky, but first we need to figure out how much we
+			 * free'd from any free-ers that occured during this
+			 * reservation, so we reset ->csum_bytes to the csum_bytes
+			 * before we dropped our lock, and then call the free for the
+			 * number of bytes that were freed while we were trying our
+			 * reservation.
+			 */
+			bytes = csum_bytes - BTRFS_I(inode)->csum_bytes;
+			BTRFS_I(inode)->csum_bytes = csum_bytes;
+			to_free = calc_csum_metadata_size(inode, bytes, 0);
+
+
+			/*
+			 * Now we need to see how much we would have freed had we not
+			 * been making this reservation and our ->csum_bytes were not
+			 * artificially inflated.
+			 */
+			BTRFS_I(inode)->csum_bytes = csum_bytes - num_bytes;
+			bytes = csum_bytes - orig_csum_bytes;
+			bytes = calc_csum_metadata_size(inode, bytes, 0);
+
+			/*
+			 * Now reset ->csum_bytes to what it should be.  If bytes is
+			 * more than to_free then we would have free'd more space had we
+			 * not had an artificially high ->csum_bytes, so we need to free
+			 * the remainder.  If bytes is the same or less then we don't
+			 * need to do anything, the other free-ers did the correct
+			 * thing.
+			 */
+			BTRFS_I(inode)->csum_bytes = orig_csum_bytes - num_bytes;
+			if (bytes > to_free)
+				to_free = bytes - to_free;
+			else
+				to_free = 0;
+		}
+		spin_unlock(&BTRFS_I(inode)->lock);
+		if (dropped)
+			to_free += btrfs_calc_trans_metadata_size(root, dropped);
+
+		if (to_free) {
+			btrfs_block_rsv_release(root, block_rsv, to_free);
+			trace_btrfs_space_reservation(root->fs_info,
+						      "delalloc",
+						      btrfs_ino(inode),
+						      to_free, 0);
+		}
+		mutex_unlock(&BTRFS_I(inode)->delalloc_mutex);
+		return ret;
 	}
 
 	spin_lock(&BTRFS_I(inode)->lock);
@@ -7298,6 +7352,7 @@ int btrfs_drop_snapshot(struct btrfs_root *root,
 	int err = 0;
 	int ret;
 	int level;
+	bool root_dropped = false;
 
 	path = btrfs_alloc_path();
 	if (!path) {
@@ -7355,6 +7410,7 @@ int btrfs_drop_snapshot(struct btrfs_root *root,
 		while (1) {
 			btrfs_tree_lock(path->nodes[level]);
 			btrfs_set_lock_blocking(path->nodes[level]);
+			path->locks[level] = BTRFS_WRITE_LOCK_BLOCKING;
 
 			ret = btrfs_lookup_extent_info(trans, root,
 						path->nodes[level]->start,
@@ -7370,6 +7426,7 @@ int btrfs_drop_snapshot(struct btrfs_root *root,
 				break;
 
 			btrfs_tree_unlock(path->nodes[level]);
+			path->locks[level] = 0;
 			WARN_ON(wc->refs[level] != 1);
 			level--;
 		}
@@ -7471,12 +7528,22 @@ int btrfs_drop_snapshot(struct btrfs_root *root,
 		free_extent_buffer(root->commit_root);
 		kfree(root);
 	}
+	root_dropped = true;
 out_end_trans:
 	btrfs_end_transaction_throttle(trans, tree_root);
 out_free:
 	kfree(wc);
 	btrfs_free_path(path);
 out:
+	/*
+	 * So if we need to stop dropping the snapshot for whatever reason we
+	 * need to make sure to add it back to the dead root list so that we
+	 * keep trying to do the work later.  This also cleans up roots if we
+	 * don't have it in the radix (like when we recover after a power fail
+	 * or unmount) so we don't leak memory.
+	 */
+	if (root_dropped == false)
+		btrfs_add_dead_root(root);
 	if (err)
 		btrfs_std_error(root->fs_info, err);
 	return err;

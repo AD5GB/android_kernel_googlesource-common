@@ -1012,13 +1012,38 @@ no_thread_group:
 	BUG_ON(!thread_group_leader(tsk));
 	return 0;
 
-killed:
-	/* protects against exit_notify() and __exit_signal() */
-	read_lock(&tasklist_lock);
-	sig->group_exit_task = NULL;
-	sig->notify_count = 0;
-	read_unlock(&tasklist_lock);
-	return -EAGAIN;
+/*
+ * These functions flushes out all traces of the currently running executable
+ * so that a new one can be started
+ */
+static void flush_old_files(struct files_struct * files)
+{
+	long j = -1;
+	struct fdtable *fdt;
+
+	spin_lock(&files->file_lock);
+	for (;;) {
+		unsigned long set, i;
+
+		j++;
+		i = j * BITS_PER_LONG;
+		fdt = files_fdtable(files);
+		if (i >= fdt->max_fds)
+			break;
+		set = fdt->close_on_exec[j];
+		if (!set)
+			continue;
+		fdt->close_on_exec[j] = 0;
+		spin_unlock(&files->file_lock);
+		for ( ; set ; i++,set >>= 1) {
+			if (set & 1) {
+				sys_close(i);
+			}
+		}
+		spin_lock(&files->file_lock);
+
+	}
+	spin_unlock(&files->file_lock);
 }
 
 char *get_task_comm(char *buf, struct task_struct *tsk)
@@ -1402,7 +1427,7 @@ int search_binary_handler(struct linux_binprm *bprm)
 				continue;
 			read_unlock(&binfmt_lock);
 			bprm->recursion_depth = depth + 1;
-			retval = fn(bprm);
+			retval = fn(bprm, regs);
 			bprm->recursion_depth = depth;
 			if (retval >= 0) {
 				if (depth == 0) {

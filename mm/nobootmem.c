@@ -120,7 +120,7 @@ static unsigned long __init __free_memory_core(phys_addr_t start,
 	return end_pfn - start_pfn;
 }
 
-static unsigned long __init free_low_memory_core_early(void)
+unsigned long __init free_low_memory_core_early(int nodeid)
 {
 	unsigned long count = 0;
 	phys_addr_t start, end, size;

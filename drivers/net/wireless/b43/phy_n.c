@@ -1657,10 +1657,8 @@ static void b43_nphy_rev3_rssi_cal(struct b43_wldev *dev)
 					vcm << 2);
 			b43_nphy_poll_rssi(dev, N_RSSI_NB, results[vcm], 8);
 		}
-
-		/* Find out which VCM got the best results */
-		for (i = 0; i < 4; i += 2) {
-			s32 currd;
+		for (i = 0; i < 4; i++) {
+			s32 curr;
 			s32 mind = 0x100000;
 			s32 minpoll = 249;
 			u8 minvcm = 0;

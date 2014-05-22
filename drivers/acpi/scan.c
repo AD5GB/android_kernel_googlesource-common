@@ -1590,18 +1590,19 @@ static void acpi_set_pnp_ids(acpi_handle handle, struct acpi_device_pnp *pnp,
 		 * Some devices don't reliably have _HIDs & _CIDs, so add
 		 * synthetic HIDs to make sure drivers can find them.
 		 */
-		if (acpi_is_video_device(handle))
-			acpi_add_id(pnp, ACPI_VIDEO_HID);
-		else if (ACPI_SUCCESS(acpi_bay_match(handle)))
-			acpi_add_id(pnp, ACPI_BAY_HID);
-		else if (ACPI_SUCCESS(acpi_dock_match(handle)))
-			acpi_add_id(pnp, ACPI_DOCK_HID);
-		else if (!acpi_ibm_smbus_match(handle))
-			acpi_add_id(pnp, ACPI_SMBUS_IBM_HID);
-		else if (list_empty(&pnp->ids) && handle == ACPI_ROOT_OBJECT) {
-			acpi_add_id(pnp, ACPI_BUS_HID); /* \_SB, LNXSYBUS */
-			strcpy(pnp->device_name, ACPI_BUS_DEVICE_NAME);
-			strcpy(pnp->device_class, ACPI_BUS_CLASS);
+		if (acpi_is_video_device(device))
+			acpi_add_id(device, ACPI_VIDEO_HID);
+		else if (ACPI_SUCCESS(acpi_bay_match(device)))
+			acpi_add_id(device, ACPI_BAY_HID);
+		else if (ACPI_SUCCESS(acpi_dock_match(device)))
+			acpi_add_id(device, ACPI_DOCK_HID);
+		else if (!acpi_ibm_smbus_match(device))
+			acpi_add_id(device, ACPI_SMBUS_IBM_HID);
+		else if (list_empty(&device->pnp.ids) &&
+			 ACPI_IS_ROOT_DEVICE(device->parent)) {
+			acpi_add_id(device, ACPI_BUS_HID); /* \_SB, LNXSYBUS */
+			strcpy(device->pnp.device_name, ACPI_BUS_DEVICE_NAME);
+			strcpy(device->pnp.device_class, ACPI_BUS_CLASS);
 		}
 
 		break;

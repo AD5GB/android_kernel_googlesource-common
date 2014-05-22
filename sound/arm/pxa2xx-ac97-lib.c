@@ -358,7 +358,7 @@ int pxa2xx_ac97_hw_probe(struct platform_device *dev)
 			       __func__, ret);
 			goto err_conf;
 		}
-		pxa27x_configure_ac97reset(reset_gpio, false);
+		pxa27x_assert_ac97reset(reset_gpio, 0);
 
 		ac97conf_clk = clk_get(&dev->dev, "AC97CONFCLK");
 		if (IS_ERR(ac97conf_clk)) {

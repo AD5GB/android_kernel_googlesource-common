@@ -242,6 +242,21 @@ void arch_cpu_idle_dead(void)
 void arch_cpu_idle(void)
 {
 	void (*mark_idle)(int) = ia64_mark_idle;
+  	int cpu = smp_processor_id();
+
+	/* endless idle loop with no priority at all */
+	while (1) {
+		rcu_idle_enter();
+		if (can_do_pal_halt) {
+			current_thread_info()->status &= ~TS_POLLING;
+			/*
+			 * TS_POLLING-cleared state must be visible before we
+			 * test NEED_RESCHED:
+			 */
+			smp_mb();
+		} else {
+			current_thread_info()->status |= TS_POLLING;
+		}
 
 #ifdef CONFIG_SMP
 	min_xtp();
@@ -257,6 +272,13 @@ void arch_cpu_idle(void)
 #ifdef CONFIG_SMP
 	normal_xtp();
 #endif
+		}
+		rcu_idle_exit();
+		schedule_preempt_disabled();
+		check_pgt_cache();
+		if (cpu_is_offline(cpu))
+			play_dead();
+	}
 }
 
 void

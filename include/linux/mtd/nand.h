@@ -171,7 +171,10 @@ typedef enum {
 
 /* Macros to identify the above */
 #define NAND_HAS_CACHEPROG(chip) ((chip->options & NAND_CACHEPRG))
-#define NAND_HAS_SUBPAGE_READ(chip) ((chip->options & NAND_SUBPAGE_READ))
+#define NAND_HAS_COPYBACK(chip) ((chip->options & NAND_COPYBACK))
+/* Large page NAND with SOFT_ECC should support subpage reads */
+#define NAND_SUBPAGE_READ(chip) ((chip->ecc.mode == NAND_ECC_SOFT) \
+					&& (chip->page_shift > 9))
 
 /* Non chip related options */
 /* This option skips the bbt scan during initialization. */

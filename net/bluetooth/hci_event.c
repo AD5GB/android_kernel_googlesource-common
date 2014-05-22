@@ -1566,7 +1566,15 @@ static void hci_cs_create_phylink(struct hci_dev *hdev, u8 status)
 		if (hcon)
 			hci_conn_del(hcon);
 	} else {
-		amp_write_remote_assoc(hdev, cp->phy_handle);
+		if (!conn) {
+			conn = hci_conn_add(hdev, LE_LINK, 0, &cp->peer_addr);
+			if (conn) {
+				conn->dst_type = cp->peer_addr_type;
+				conn->out = true;
+			} else {
+				BT_ERR("No memory for new connection");
+			}
+		}
 	}
 
 	hci_dev_unlock(hdev);
@@ -1757,7 +1765,7 @@ static inline bool is_sco_active(struct hci_dev *hdev)
 	return false;
 }
 
-static void hci_conn_request_evt(struct hci_dev *hdev, struct sk_buff *skb)
+static inline void hci_conn_request_evt(struct hci_dev *hdev, struct sk_buff *skb)
 {
 	struct hci_ev_conn_request *ev = (void *) skb->data;
 	int mask = hdev->link_mode;
@@ -2344,8 +2352,6 @@ static void hci_cmd_complete_evt(struct hci_dev *hdev, struct sk_buff *skb)
 
 	if (opcode != HCI_OP_NOP)
 		del_timer(&hdev->cmd_timer);
-
-	hci_req_cmd_complete(hdev, opcode, status);
 
 	if (ev->ncmd && !test_bit(HCI_RESET, &hdev->flags)) {
 		atomic_set(&hdev->cmd_cnt, 1);
@@ -3623,7 +3629,11 @@ static void hci_le_ltk_request_evt(struct hci_dev *hdev, struct sk_buff *skb)
 	cp.handle = cpu_to_le16(conn->handle);
 
 	if (ltk->authenticated)
-		conn->sec_level = BT_SECURITY_HIGH;
+		conn->pending_sec_level = BT_SECURITY_HIGH;
+	else
+		conn->pending_sec_level = BT_SECURITY_MEDIUM;
+
+	conn->enc_key_size = ltk->enc_size;
 
 	hci_send_cmd(hdev, HCI_OP_LE_LTK_REPLY, sizeof(cp), &cp);
 

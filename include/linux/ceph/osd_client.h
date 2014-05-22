@@ -10,7 +10,6 @@
 #include <linux/ceph/osdmap.h>
 #include <linux/ceph/messenger.h>
 #include <linux/ceph/auth.h>
-#include <linux/ceph/pagelist.h>
 
 /* 
  * Maximum object name size 
@@ -236,63 +235,12 @@ extern void ceph_osdc_handle_reply(struct ceph_osd_client *osdc,
 extern void ceph_osdc_handle_map(struct ceph_osd_client *osdc,
 				 struct ceph_msg *msg);
 
-extern void osd_req_op_init(struct ceph_osd_request *osd_req,
-					unsigned int which, u16 opcode);
-
-extern void osd_req_op_raw_data_in_pages(struct ceph_osd_request *,
-					unsigned int which,
-					struct page **pages, u64 length,
-					u32 alignment, bool pages_from_pool,
-					bool own_pages);
-
-extern void osd_req_op_extent_init(struct ceph_osd_request *osd_req,
-					unsigned int which, u16 opcode,
-					u64 offset, u64 length,
-					u64 truncate_size, u32 truncate_seq);
-extern void osd_req_op_extent_update(struct ceph_osd_request *osd_req,
-					unsigned int which, u64 length);
-
-extern struct ceph_osd_data *osd_req_op_extent_osd_data(
-					struct ceph_osd_request *osd_req,
-					unsigned int which);
-extern struct ceph_osd_data *osd_req_op_cls_response_data(
-					struct ceph_osd_request *osd_req,
-					unsigned int which);
-
-extern void osd_req_op_extent_osd_data_pages(struct ceph_osd_request *,
-					unsigned int which,
-					struct page **pages, u64 length,
-					u32 alignment, bool pages_from_pool,
-					bool own_pages);
-extern void osd_req_op_extent_osd_data_pagelist(struct ceph_osd_request *,
-					unsigned int which,
-					struct ceph_pagelist *pagelist);
-#ifdef CONFIG_BLOCK
-extern void osd_req_op_extent_osd_data_bio(struct ceph_osd_request *,
-					unsigned int which,
-					struct bio *bio, size_t bio_length);
-#endif /* CONFIG_BLOCK */
-
-extern void osd_req_op_cls_request_data_pagelist(struct ceph_osd_request *,
-					unsigned int which,
-					struct ceph_pagelist *pagelist);
-extern void osd_req_op_cls_request_data_pages(struct ceph_osd_request *,
-					unsigned int which,
-					struct page **pages, u64 length,
-					u32 alignment, bool pages_from_pool,
-					bool own_pages);
-extern void osd_req_op_cls_response_data_pages(struct ceph_osd_request *,
-					unsigned int which,
-					struct page **pages, u64 length,
-					u32 alignment, bool pages_from_pool,
-					bool own_pages);
-
-extern void osd_req_op_cls_init(struct ceph_osd_request *osd_req,
-					unsigned int which, u16 opcode,
-					const char *class, const char *method);
-extern void osd_req_op_watch_init(struct ceph_osd_request *osd_req,
-					unsigned int which, u16 opcode,
-					u64 cookie, u64 version, int flag);
+extern int ceph_calc_raw_layout(struct ceph_osd_client *osdc,
+			struct ceph_file_layout *layout,
+			u64 snapid,
+			u64 off, u64 *plen, u64 *bno,
+			struct ceph_osd_request *req,
+			struct ceph_osd_req_op *op);
 
 extern struct ceph_osd_request *ceph_osdc_alloc_request(struct ceph_osd_client *osdc,
 					       struct ceph_snap_context *snapc,

@@ -1317,13 +1317,7 @@ void ieee80211_sched_scan_stopped_work(struct work_struct *work);
 /* off-channel helpers */
 void ieee80211_offchannel_stop_vifs(struct ieee80211_local *local);
 void ieee80211_offchannel_return(struct ieee80211_local *local);
-void ieee80211_roc_setup(struct ieee80211_local *local);
-void ieee80211_start_next_roc(struct ieee80211_local *local);
-void ieee80211_roc_purge(struct ieee80211_local *local,
-			 struct ieee80211_sub_if_data *sdata);
-void ieee80211_roc_notify_destroy(struct ieee80211_roc_work *roc, bool free);
-void ieee80211_sw_roc_work(struct work_struct *work);
-void ieee80211_handle_roc_started(struct ieee80211_roc_work *roc);
+void ieee80211_hw_roc_setup(struct ieee80211_local *local);
 
 /* interface handling */
 int ieee80211_iface_init(void);

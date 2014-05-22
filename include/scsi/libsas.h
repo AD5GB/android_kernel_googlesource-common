@@ -179,11 +179,6 @@ struct sata_device {
 	u8     fis[ATA_RESP_FIS_SIZE];
 };
 
-struct ssp_device {
-	struct list_head eh_list_node; /* pending a user requested eh action */
-	struct scsi_lun reset_lun;
-};
-
 enum {
 	SAS_DEV_GONE,
 	SAS_DEV_FOUND, /* device notified to lldd */

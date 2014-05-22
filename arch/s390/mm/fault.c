@@ -610,11 +610,9 @@ static void pfault_interrupt(struct ext_code ext_code,
 		}
 	} else {
 		/* signal bit not set -> a real page is missing. */
-		if (WARN_ON_ONCE(tsk != current))
-			goto out;
 		if (tsk->thread.pfault_wait == 1) {
 			/* Already on the list with a reference: put to sleep */
-			__set_task_state(tsk, TASK_UNINTERRUPTIBLE);
+			set_task_state(tsk, TASK_UNINTERRUPTIBLE);
 			set_tsk_need_resched(tsk);
 		} else if (tsk->thread.pfault_wait == -1) {
 			/* Completion interrupt was faster than the initial

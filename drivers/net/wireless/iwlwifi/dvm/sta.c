@@ -209,7 +209,7 @@ static void iwl_sta_calc_ht_flags(struct iwl_priv *priv,
 
 	IWL_DEBUG_INFO(priv, "STA %pM SM PS mode: %s\n",
 			sta->addr,
-			(sta->smps_mode == IEEE80211_SMPS_STATIC) ?
+			(mimo_ps_mode == WLAN_HT_CAP_SM_PS_STATIC) ?
 			"static" :
 			(sta->smps_mode == IEEE80211_SMPS_DYNAMIC) ?
 			"dynamic" : "disabled");

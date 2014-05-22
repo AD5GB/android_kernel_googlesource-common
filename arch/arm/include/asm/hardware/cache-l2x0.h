@@ -103,10 +103,6 @@
 
 #define L2X0_ADDR_FILTER_EN		1
 
-#define L2X0_CTRL_EN			1
-
-#define L2X0_WAY_SIZE_SHIFT		3
-
 #define REV_PL310_R2P0				4
 
 #ifndef __ASSEMBLY__

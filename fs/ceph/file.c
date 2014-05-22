@@ -547,7 +547,7 @@ more:
 				    vino, pos, &len, num_ops,
 				    CEPH_OSD_OP_WRITE, flags, snapc,
 				    ci->i_truncate_seq, ci->i_truncate_size,
-				    false);
+				    &mtime, false, 2, page_align);
 	if (IS_ERR(req))
 		return PTR_ERR(req);
 

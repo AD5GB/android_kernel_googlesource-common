@@ -1476,7 +1476,7 @@ out:
 static int vidioc_streamoff(struct file *file, void *priv,
 				enum v4l2_buf_type buf_type)
 {
-	struct gspca_dev *gspca_dev = video_drvdata(file);
+	struct gspca_dev *gspca_dev = priv;
 	int i, ret;
 
 	if (buf_type != V4L2_BUF_TYPE_VIDEO_CAPTURE)

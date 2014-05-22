@@ -668,13 +668,13 @@ static ssize_t export_store(struct class *class,
 	 * they may be undone on its behalf too.
 	 */
 
-	status = gpiod_request(desc, "sysfs");
+	status = gpio_request(gpio, "sysfs");
 	if (status < 0) {
 		if (status == -EPROBE_DEFER)
 			status = -ENODEV;
 		goto done;
 	}
-	status = gpiod_export(desc, true);
+	status = gpio_export(gpio, true);
 	if (status < 0)
 		gpiod_free(desc);
 	else
@@ -1405,6 +1405,11 @@ static int gpiod_request(struct gpio_desc *desc, const char *label)
 
 	spin_lock_irqsave(&gpio_lock, flags);
 
+	if (!gpio_is_valid(gpio)) {
+		status = -EINVAL;
+		goto done;
+	}
+	desc = &gpio_desc[gpio];
 	chip = desc->chip;
 	if (chip == NULL)
 		goto done;

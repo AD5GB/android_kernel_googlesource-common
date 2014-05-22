@@ -194,8 +194,6 @@ static int pack_sg_list(struct scatterlist *sg, int start,
 		if (s > count)
 			s = count;
 		BUG_ON(index > limit);
-		/* Make sure we don't terminate early. */
-		sg_unmark_end(&sg[index]);
 		sg_set_buf(&sg[index++], data, s);
 		count -= s;
 		data += s;

@@ -76,11 +76,11 @@ static LIST_HEAD(log_list);
  * reference counting. The structure is protected by log->mutex.
  */
 struct logger_reader {
-	struct logger_log	*log;
-	struct list_head	list;
-	size_t			r_off;
-	bool			r_all;
-	int			r_ver;
+	struct logger_log	*log;	/* associated log */
+	struct list_head	list;	/* entry in logger_log's list */
+	size_t			r_off;	/* current read head offset */
+	bool			r_all;	/* reader can read all entries */
+	int			r_ver;	/* reader ABI version */
 };
 
 /* logger_offset - returns index 'n' into the log via (optimized) modulus */
@@ -242,7 +242,7 @@ static ssize_t do_read_log_to_user(struct logger_log *log,
  * 'log->buffer' which contains the first entry readable by 'euid'
  */
 static size_t get_next_entry_by_uid(struct logger_log *log,
-		size_t off, kuid_t euid)
+		size_t off, uid_t euid)
 {
 	while (off != log->w_off) {
 		struct logger_entry *entry;
@@ -251,7 +251,7 @@ static size_t get_next_entry_by_uid(struct logger_log *log,
 
 		entry = get_entry_header(log, off, &scratch);
 
-		if (uid_eq(entry->euid, euid))
+		if (entry->euid == euid)
 			return off;
 
 		next_len = sizeof(struct logger_entry) + entry->len;
@@ -741,7 +741,8 @@ static const struct file_operations logger_fops = {
 };
 
 /*
- * Log size must must be a power of two, and greater than
+ * Defines a log structure with name 'NAME' and a size of 'SIZE' bytes, which
+ * must be a power of two, and greater than
  * (LOGGER_ENTRY_MAX_PAYLOAD + sizeof(struct logger_entry)).
  */
 static int __init create_log(char *log_name, int size)

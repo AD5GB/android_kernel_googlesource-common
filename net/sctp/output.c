@@ -326,43 +326,6 @@ finish:
 	return retval;
 }
 
-/* Append a chunk to the offered packet reporting back any inability to do
- * so.
- */
-sctp_xmit_t sctp_packet_append_chunk(struct sctp_packet *packet,
-				     struct sctp_chunk *chunk)
-{
-	sctp_xmit_t retval = SCTP_XMIT_OK;
-
-	SCTP_DEBUG_PRINTK("%s: packet:%p chunk:%p\n", __func__, packet,
-			  chunk);
-
-	/* Data chunks are special.  Before seeing what else we can
-	 * bundle into this packet, check to see if we are allowed to
-	 * send this DATA.
-	 */
-	if (sctp_chunk_is_data(chunk)) {
-		retval = sctp_packet_can_append_data(packet, chunk);
-		if (retval != SCTP_XMIT_OK)
-			goto finish;
-	}
-
-	/* Try to bundle AUTH chunk */
-	retval = sctp_packet_bundle_auth(packet, chunk);
-	if (retval != SCTP_XMIT_OK)
-		goto finish;
-
-	/* Try to bundle SACK chunk */
-	retval = sctp_packet_bundle_sack(packet, chunk);
-	if (retval != SCTP_XMIT_OK)
-		goto finish;
-
-	retval = __sctp_packet_append_chunk(packet, chunk);
-
-finish:
-	return retval;
-}
-
 static void sctp_packet_release_owner(struct sk_buff *skb)
 {
 	sk_free(skb->sk);

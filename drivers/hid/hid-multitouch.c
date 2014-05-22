@@ -96,8 +96,7 @@ struct mt_device {
 	struct mt_class mtclass;	/* our mt device class */
 	struct mt_fields *fields;	/* temporary placeholder for storing the
 					   multitouch fields */
-	int cc_index;	/* contact count field index in the report */
-	int cc_value_index;	/* contact count value index in the field */
+	unsigned last_field_index;	/* last field index of the report */
 	unsigned last_slot_field;	/* the last field of a slot */
 	unsigned mt_report_id;	/* the report ID of the multitouch device */
 	unsigned pen_report_id;	/* the report ID of the pen device */
@@ -458,6 +457,16 @@ static int mt_touch_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 	if (usage->usage_index)
 		prev_usage = &field->usage[usage->usage_index - 1];
 
+	/* Only map fields from TouchScreen or TouchPad collections.
+         * We need to ignore fields that belong to other collections
+         * such as Mouse that might have the same GenericDesktop usages. */
+	if (field->application == HID_DG_TOUCHSCREEN)
+		set_bit(INPUT_PROP_DIRECT, hi->input->propbit);
+	else if (field->application == HID_DG_TOUCHPAD)
+		set_bit(INPUT_PROP_POINTER, hi->input->propbit);
+	else
+		return 0;
+
 	switch (usage->hid & HID_USAGE_PAGE) {
 
 	case HID_UP_GENDESK:
@@ -471,11 +480,12 @@ static int mt_touch_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 			} else {
 				hid_map_usage(hi, usage, bit, max,
 					EV_ABS, ABS_MT_POSITION_X);
-				set_abs(hi->input, ABS_MT_POSITION_X, field,
-					cls->sn_move);
-			}
-
+			set_abs(hi->input, ABS_MT_POSITION_X, field,
+				cls->sn_move);
+			/* touchscreen emulation */
+			set_abs(hi->input, ABS_X, field, cls->sn_move);
 			mt_store_field(usage, td, hi);
+			td->last_field_index = field->index;
 			return 1;
 		case HID_GD_Y:
 			if (prev_usage && (prev_usage->hid == usage->hid)) {
@@ -486,11 +496,12 @@ static int mt_touch_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 			} else {
 				hid_map_usage(hi, usage, bit, max,
 					EV_ABS, ABS_MT_POSITION_Y);
-				set_abs(hi->input, ABS_MT_POSITION_Y, field,
-					cls->sn_move);
-			}
-
+			set_abs(hi->input, ABS_MT_POSITION_Y, field,
+				cls->sn_move);
+			/* touchscreen emulation */
+			set_abs(hi->input, ABS_Y, field, cls->sn_move);
 			mt_store_field(usage, td, hi);
+			td->last_field_index = field->index;
 			return 1;
 		}
 		return 0;
@@ -498,34 +509,35 @@ static int mt_touch_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 	case HID_UP_DIGITIZER:
 		switch (usage->hid) {
 		case HID_DG_INRANGE:
-			if (cls->quirks & MT_QUIRK_HOVERING) {
-				hid_map_usage(hi, usage, bit, max,
-					EV_ABS, ABS_MT_DISTANCE);
-				input_set_abs_params(hi->input,
-					ABS_MT_DISTANCE, 0, 1, 0, 0);
-			}
 			mt_store_field(usage, td, hi);
+			td->last_field_index = field->index;
 			return 1;
 		case HID_DG_CONFIDENCE:
 			mt_store_field(usage, td, hi);
+			td->last_field_index = field->index;
 			return 1;
 		case HID_DG_TIPSWITCH:
 			hid_map_usage(hi, usage, bit, max, EV_KEY, BTN_TOUCH);
 			input_set_capability(hi->input, EV_KEY, BTN_TOUCH);
 			mt_store_field(usage, td, hi);
+			td->last_field_index = field->index;
 			return 1;
 		case HID_DG_CONTACTID:
+			if (!td->maxcontacts)
+				td->maxcontacts = MT_DEFAULT_MAXCONTACT;
+			input_mt_init_slots(hi->input, td->maxcontacts);
 			mt_store_field(usage, td, hi);
+			td->last_field_index = field->index;
 			td->touches_by_report++;
 			td->mt_report_id = field->report->id;
 			return 1;
 		case HID_DG_WIDTH:
 			hid_map_usage(hi, usage, bit, max,
 					EV_ABS, ABS_MT_TOUCH_MAJOR);
-			if (!(cls->quirks & MT_QUIRK_NO_AREA))
-				set_abs(hi->input, ABS_MT_TOUCH_MAJOR, field,
-					cls->sn_width);
+			set_abs(hi->input, ABS_MT_TOUCH_MAJOR, field,
+				cls->sn_width);
 			mt_store_field(usage, td, hi);
+			td->last_field_index = field->index;
 			return 1;
 		case HID_DG_HEIGHT:
 			hid_map_usage(hi, usage, bit, max,
@@ -535,15 +547,19 @@ static int mt_touch_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 					cls->sn_height);
 				input_set_abs_params(hi->input,
 					ABS_MT_ORIENTATION, 0, 1, 0, 0);
-			}
 			mt_store_field(usage, td, hi);
+			td->last_field_index = field->index;
 			return 1;
 		case HID_DG_TIPPRESSURE:
 			hid_map_usage(hi, usage, bit, max,
 					EV_ABS, ABS_MT_PRESSURE);
 			set_abs(hi->input, ABS_MT_PRESSURE, field,
 				cls->sn_pressure);
+			/* touchscreen emulation */
+			set_abs(hi->input, ABS_PRESSURE, field,
+				cls->sn_pressure);
 			mt_store_field(usage, td, hi);
+			td->last_field_index = field->index;
 			return 1;
 		case HID_DG_CONTACTCOUNT:
 			td->cc_index = field->index;
@@ -909,51 +925,14 @@ static void mt_set_maxcontacts(struct hid_device *hdev)
 	}
 }
 
-static void mt_post_parse_default_settings(struct mt_device *td)
-{
-	__s32 quirks = td->mtclass.quirks;
-
-	/* unknown serial device needs special quirks */
-	if (td->touches_by_report == 1) {
-		quirks |= MT_QUIRK_ALWAYS_VALID;
-		quirks &= ~MT_QUIRK_NOT_SEEN_MEANS_UP;
-		quirks &= ~MT_QUIRK_VALID_IS_INRANGE;
-		quirks &= ~MT_QUIRK_VALID_IS_CONFIDENCE;
-		quirks &= ~MT_QUIRK_CONTACT_CNT_ACCURATE;
-	}
-
-	td->mtclass.quirks = quirks;
-}
-
 static void mt_post_parse(struct mt_device *td)
 {
 	struct mt_fields *f = td->fields;
-	struct mt_class *cls = &td->mtclass;
 
 	if (td->touches_by_report > 0) {
 		int field_count_per_touch = f->length / td->touches_by_report;
 		td->last_slot_field = f->usages[field_count_per_touch - 1];
 	}
-
-	if (td->cc_index < 0)
-		cls->quirks &= ~MT_QUIRK_CONTACT_CNT_ACCURATE;
-}
-
-static int mt_input_configured(struct hid_device *hdev, struct hid_input *hi)
-{
-	struct mt_device *td = hid_get_drvdata(hdev);
-	char *name = kstrdup(hdev->name, GFP_KERNEL);
-	int ret = 0;
-
-	if (name)
-		hi->input->name = name;
-
-	if (hi->report->id == td->mt_report_id)
-		ret = mt_touch_input_configured(hdev, hi);
-
-	if (hi->report->id == td->pen_report_id)
-		mt_pen_input_configured(hdev, hi);
-	return ret;
 }
 
 static int mt_probe(struct hid_device *hdev, const struct hid_device_id *id)
@@ -1003,16 +982,33 @@ static int mt_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		goto fail;
 	}
 
-	if (id->vendor == HID_ANY_ID && id->product == HID_ANY_ID)
-		td->serial_maybe = true;
-
 	ret = hid_parse(hdev);
 	if (ret != 0)
 		goto fail;
 
 	ret = hid_hw_start(hdev, HID_CONNECT_DEFAULT);
 	if (ret)
-		goto hid_fail;
+		goto fail;
+
+	mt_post_parse(td);
+
+	if (!id && td->touches_by_report == 1) {
+		/* the device has been sent by hid-generic */
+		mtclass = &td->mtclass;
+		mtclass->quirks |= MT_QUIRK_ALWAYS_VALID;
+		mtclass->quirks &= ~MT_QUIRK_NOT_SEEN_MEANS_UP;
+		mtclass->quirks &= ~MT_QUIRK_VALID_IS_INRANGE;
+		mtclass->quirks &= ~MT_QUIRK_VALID_IS_CONFIDENCE;
+	}
+
+	td->slots = kzalloc(td->maxcontacts * sizeof(struct mt_slot),
+				GFP_KERNEL);
+	if (!td->slots) {
+		dev_err(&hdev->dev, "cannot allocate multitouch slots\n");
+		hid_hw_stop(hdev);
+		ret = -ENOMEM;
+		goto fail;
+	}
 
 	ret = sysfs_create_group(&hdev->dev.kobj, &mt_attribute_group);
 
@@ -1095,8 +1091,8 @@ static const struct hid_device_id mt_devices[] = {
 			USB_DEVICE_ID_ATMEL_MXT_DIGITIZER) },
 
 	/* Baanto multitouch devices */
-	{ .driver_data = MT_CLS_NSMU,
-		MT_USB_DEVICE(USB_VENDOR_ID_BAANTO,
+	{ .driver_data = MT_CLS_DEFAULT,
+		HID_USB_DEVICE(USB_VENDOR_ID_BAANTO,
 			USB_DEVICE_ID_BAANTO_MT_190W2) },
 	/* Cando panels */
 	{ .driver_data = MT_CLS_DUAL_INRANGE_CONTACTNUMBER,
@@ -1277,8 +1273,8 @@ static const struct hid_device_id mt_devices[] = {
 			USB_DEVICE_ID_PANABOARD_UBT880) },
 
 	/* Novatek Panel */
-	{ .driver_data = MT_CLS_NSMU,
-		MT_USB_DEVICE(USB_VENDOR_ID_NOVATEK,
+	{ .driver_data = MT_CLS_DEFAULT,
+		HID_USB_DEVICE(USB_VENDOR_ID_NOVATEK,
 			USB_DEVICE_ID_NOVATEK_PCT) },
 
 	/* PenMount panels */

@@ -86,12 +86,38 @@ static struct {
 #endif /* CONFIG_CIFS_WEAK_PW_HASH */
 #endif /* CIFS_POSIX */
 
+/* Forward declarations */
+static void cifs_readv_complete(struct work_struct *work);
+
+#ifdef CONFIG_HIGHMEM
 /*
- * Mark as invalid, all open files on tree connections since they
- * were closed when session to server was lost.
+ * On arches that have high memory, kmap address space is limited. By
+ * serializing the kmap operations on those arches, we ensure that we don't
+ * end up with a bunch of threads in writeback with partially mapped page
+ * arrays, stuck waiting for kmap to come back. That situation prevents
+ * progress and can deadlock.
  */
-void
-cifs_mark_open_files_invalid(struct cifs_tcon *tcon)
+static DEFINE_MUTEX(cifs_kmap_mutex);
+
+static inline void
+cifs_kmap_lock(void)
+{
+	mutex_lock(&cifs_kmap_mutex);
+}
+
+static inline void
+cifs_kmap_unlock(void)
+{
+	mutex_unlock(&cifs_kmap_mutex);
+}
+#else /* !CONFIG_HIGHMEM */
+#define cifs_kmap_lock() do { ; } while(0)
+#define cifs_kmap_unlock() do { ; } while(0)
+#endif /* CONFIG_HIGHMEM */
+
+/* Mark as invalid, all open files on tree connections since they
+   were closed when session to server was lost */
+static void mark_open_files_invalid(struct cifs_tcon *pTcon)
 {
 	struct cifsFileInfo *open_file = NULL;
 	struct list_head *tmp;
@@ -1502,9 +1528,78 @@ cifs_readv_receive(struct TCP_Server_Info *server, struct mid_q_entry *mid)
 		return cifs_readv_discard(server, mid);
 	}
 
-	length = rdata->read_into_pages(server, rdata, data_len);
-	if (length < 0)
-		return length;
+	/* marshal up the page array */
+	len = 0;
+	remaining = data_len;
+	rdata->nr_iov = 1;
+
+	/* determine the eof that the server (probably) has */
+	eof = CIFS_I(rdata->mapping->host)->server_eof;
+	eof_index = eof ? (eof - 1) >> PAGE_CACHE_SHIFT : 0;
+	cFYI(1, "eof=%llu eof_index=%lu", eof, eof_index);
+
+	cifs_kmap_lock();
+	list_for_each_entry_safe(page, tpage, &rdata->pages, lru) {
+		if (remaining >= PAGE_CACHE_SIZE) {
+			/* enough data to fill the page */
+			rdata->iov[rdata->nr_iov].iov_base = kmap(page);
+			rdata->iov[rdata->nr_iov].iov_len = PAGE_CACHE_SIZE;
+			cFYI(1, "%u: idx=%lu iov_base=%p iov_len=%zu",
+				rdata->nr_iov, page->index,
+				rdata->iov[rdata->nr_iov].iov_base,
+				rdata->iov[rdata->nr_iov].iov_len);
+			++rdata->nr_iov;
+			len += PAGE_CACHE_SIZE;
+			remaining -= PAGE_CACHE_SIZE;
+		} else if (remaining > 0) {
+			/* enough for partial page, fill and zero the rest */
+			rdata->iov[rdata->nr_iov].iov_base = kmap(page);
+			rdata->iov[rdata->nr_iov].iov_len = remaining;
+			cFYI(1, "%u: idx=%lu iov_base=%p iov_len=%zu",
+				rdata->nr_iov, page->index,
+				rdata->iov[rdata->nr_iov].iov_base,
+				rdata->iov[rdata->nr_iov].iov_len);
+			memset(rdata->iov[rdata->nr_iov].iov_base + remaining,
+				'\0', PAGE_CACHE_SIZE - remaining);
+			++rdata->nr_iov;
+			len += remaining;
+			remaining = 0;
+		} else if (page->index > eof_index) {
+			/*
+			 * The VFS will not try to do readahead past the
+			 * i_size, but it's possible that we have outstanding
+			 * writes with gaps in the middle and the i_size hasn't
+			 * caught up yet. Populate those with zeroed out pages
+			 * to prevent the VFS from repeatedly attempting to
+			 * fill them until the writes are flushed.
+			 */
+			zero_user(page, 0, PAGE_CACHE_SIZE);
+			list_del(&page->lru);
+			lru_cache_add_file(page);
+			flush_dcache_page(page);
+			SetPageUptodate(page);
+			unlock_page(page);
+			page_cache_release(page);
+		} else {
+			/* no need to hold page hostage */
+			list_del(&page->lru);
+			lru_cache_add_file(page);
+			unlock_page(page);
+			page_cache_release(page);
+		}
+	}
+	cifs_kmap_unlock();
+
+	/* issue the read if we have any iovecs left to fill */
+	if (rdata->nr_iov > 1) {
+		length = cifs_readv_from_socket(server, &rdata->iov[1],
+						rdata->nr_iov - 1, len);
+		if (length < 0)
+			return length;
+		server->total_read += length;
+	} else {
+		length = 0;
+	}
 
 	server->total_read += length;
 	rdata->bytes = length;
@@ -2064,12 +2159,15 @@ cifs_async_writev(struct cifs_writedata *wdata)
 	iov.iov_len = be32_to_cpu(smb->hdr.smb_buf_length) + 4 + 1;
 	iov.iov_base = smb;
 
-	rqst.rq_iov = &iov;
-	rqst.rq_nvec = 1;
-	rqst.rq_pages = wdata->pages;
-	rqst.rq_npages = wdata->nr_pages;
-	rqst.rq_pagesz = wdata->pagesz;
-	rqst.rq_tailsz = wdata->tailsz;
+	/*
+	 * This function should marshal up the page array into the kvec
+	 * array, reserving [0] for the header. It should kmap the pages
+	 * and set the iov_len properly for each one. It may also set
+	 * wdata->bytes too.
+	 */
+	cifs_kmap_lock();
+	wdata->marshal_iov(iov, wdata);
+	cifs_kmap_unlock();
 
 	cifs_dbg(FYI, "async write at %llu %u bytes\n",
 		 wdata->offset, wdata->bytes);
@@ -4220,10 +4318,11 @@ UnixQPathInfoRetry:
 
 /* xid, tcon, searchName and codepage are input parms, rest are returned */
 int
-CIFSFindFirst(const unsigned int xid, struct cifs_tcon *tcon,
-	      const char *searchName, struct cifs_sb_info *cifs_sb,
+CIFSFindFirst(const int xid, struct cifs_tcon *tcon,
+	      const char *searchName,
+	      const struct nls_table *nls_codepage,
 	      __u16 *pnetfid, __u16 search_flags,
-	      struct cifs_search_info *psrch_inf, bool msearch)
+	      struct cifs_search_info *psrch_inf, int remap, const char dirsep)
 {
 /* level 257 SMB_ */
 	TRANSACTION2_FFIRST_REQ *pSMB = NULL;
@@ -4374,9 +4473,8 @@ findFirstRetry:
 	return rc;
 }
 
-int CIFSFindNext(const unsigned int xid, struct cifs_tcon *tcon,
-		 __u16 searchHandle, __u16 search_flags,
-		 struct cifs_search_info *psrch_inf)
+int CIFSFindNext(const int xid, struct cifs_tcon *tcon, __u16 searchHandle,
+		 __u16 search_flags, struct cifs_search_info *psrch_inf)
 {
 	TRANSACTION2_FNEXT_REQ *pSMB = NULL;
 	TRANSACTION2_FNEXT_RSP *pSMBr = NULL;

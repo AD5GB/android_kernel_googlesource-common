@@ -374,16 +374,6 @@ _GLOBAL(ret_from_fork)
 	li	r3,0
 	b	syscall_exit
 
-_GLOBAL(ret_from_kernel_thread)
-	bl	.schedule_tail
-	REST_NVGPRS(r1)
-	ld	r14, 0(r14)
-	mtlr	r14
-	mr	r3,r15
-	blrl
-	li	r3,0
-	b	syscall_exit
-
 	.section	".toc","aw"
 DSCR_DEFAULT:
 	.tc dscr_default[TC],dscr_default
@@ -556,21 +546,6 @@ END_MMU_FTR_SECTION_IFSET(MMU_FTR_1T_SEGMENT)
 
 	mr	r1,r8		/* start using new stack pointer */
 	std	r7,PACAKSAVE(r13)
-
-#ifdef CONFIG_PPC_BOOK3S_64
-BEGIN_FTR_SECTION
-	/* Event based branch registers */
-	ld	r0, THREAD_BESCR(r4)
-	mtspr	SPRN_BESCR, r0
-	ld	r0, THREAD_EBBHR(r4)
-	mtspr	SPRN_EBBHR, r0
-	ld	r0, THREAD_EBBRR(r4)
-	mtspr	SPRN_EBBRR, r0
-
-	ld	r0,THREAD_TAR(r4)
-	mtspr	SPRN_TAR,r0
-END_FTR_SECTION_IFSET(CPU_FTR_ARCH_207S)
-#endif
 
 #ifdef CONFIG_ALTIVEC
 BEGIN_FTR_SECTION

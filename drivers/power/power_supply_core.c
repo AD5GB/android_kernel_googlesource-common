@@ -526,14 +526,6 @@ int power_supply_register(struct device *parent, struct power_supply *psy)
 	if (rc)
 		goto wakeup_init_failed;
 
-	rc = psy_register_thermal(psy);
-	if (rc)
-		goto register_thermal_failed;
-
-	rc = psy_register_cooler(psy);
-	if (rc)
-		goto register_cooler_failed;
-
 	rc = power_supply_create_triggers(psy);
 	if (rc)
 		goto create_triggers_failed;
@@ -543,10 +535,6 @@ int power_supply_register(struct device *parent, struct power_supply *psy)
 	goto success;
 
 create_triggers_failed:
-	psy_unregister_cooler(psy);
-register_cooler_failed:
-	psy_unregister_thermal(psy);
-register_thermal_failed:
 wakeup_init_failed:
 	device_del(dev);
 kobject_set_name_failed:

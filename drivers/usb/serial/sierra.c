@@ -288,6 +288,10 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x0F3D, 0x68AA, 0xFF, 0xFF, 0xFF),
 	  .driver_info = (kernel_ulong_t)&direct_ip_interface_blacklist
 	},
+	/* AT&T Direct IP LTE modems */
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x0F3D, 0x68AA, 0xFF, 0xFF, 0xFF),
+	  .driver_info = (kernel_ulong_t)&direct_ip_interface_blacklist
+	},
 	{ USB_DEVICE(0x0f3d, 0x68A3), 	/* Airprime/Sierra Wireless Direct IP modems */
 	  .driver_info = (kernel_ulong_t)&direct_ip_interface_blacklist
 	},
@@ -858,7 +862,14 @@ static void sierra_dtr_rts(struct usb_serial_port *port, int on)
 
 static int sierra_startup(struct usb_serial *serial)
 {
+	struct usb_serial_port *port;
 	struct sierra_intf_private *intfdata;
+	struct sierra_port_private *portdata;
+	struct sierra_iface_info *himemoryp = NULL;
+	int i;
+	u8 ifnum;
+
+	usb_set_serial_data(serial, intfdata);
 
 	intfdata = kzalloc(sizeof(*intfdata), GFP_KERNEL);
 	if (!intfdata)
@@ -875,7 +886,59 @@ static int sierra_startup(struct usb_serial *serial)
 	if (nmea)
 		sierra_vsc_set_nmea(serial->dev, 1);
 
+	/* Now setup per port private data */
+	for (i = 0; i < serial->num_ports; i++) {
+		port = serial->port[i];
+		portdata = kzalloc(sizeof(*portdata), GFP_KERNEL);
+		if (!portdata) {
+			dev_dbg(&port->dev, "%s: kmalloc for "
+				"sierra_port_private (%d) failed!\n",
+				__func__, i);
+			goto err;
+		}
+		spin_lock_init(&portdata->lock);
+		init_usb_anchor(&portdata->active);
+		init_usb_anchor(&portdata->delayed);
+		ifnum = i;
+		/* Assume low memory requirements */
+		portdata->num_out_urbs = N_OUT_URB;
+		portdata->num_in_urbs  = N_IN_URB;
+
+		/* Determine actual memory requirements */
+		if (serial->num_ports == 1) {
+			/* Get interface number for composite device */
+			ifnum = sierra_calc_interface(serial);
+			himemoryp =
+			    (struct sierra_iface_info *)&typeB_interface_list;
+			if (is_himemory(ifnum, himemoryp)) {
+				portdata->num_out_urbs = N_OUT_URB_HM;
+				portdata->num_in_urbs  = N_IN_URB_HM;
+			}
+		}
+		else {
+			himemoryp =
+			    (struct sierra_iface_info *)&typeA_interface_list;
+			if (is_himemory(i, himemoryp)) {
+				portdata->num_out_urbs = N_OUT_URB_HM;
+				portdata->num_in_urbs  = N_IN_URB_HM;
+			}
+		}
+		dev_dbg(&serial->dev->dev,
+			"Memory usage (urbs) interface #%d, in=%d, out=%d\n",
+			ifnum,portdata->num_in_urbs, portdata->num_out_urbs );
+		/* Set the port private data pointer */
+		usb_set_serial_port_data(port, portdata);
+	}
+
 	return 0;
+err:
+	for (--i; i >= 0; --i) {
+		portdata = usb_get_serial_port_data(serial->port[i]);
+		kfree(portdata);
+	}
+	kfree(intfdata);
+
+	return -ENOMEM;
 }
 
 static void sierra_release(struct usb_serial *serial)
@@ -922,24 +985,7 @@ static int sierra_port_probe(struct usb_serial_port *port)
 		portdata->num_out_urbs = N_OUT_URB_HM;
 		portdata->num_in_urbs  = N_IN_URB_HM;
 	}
-
-	dev_dbg(&port->dev,
-			"Memory usage (urbs) interface #%d, in=%d, out=%d\n",
-			ifnum, portdata->num_in_urbs, portdata->num_out_urbs);
-
-	usb_set_serial_port_data(port, portdata);
-
-	return 0;
-}
-
-static int sierra_port_remove(struct usb_serial_port *port)
-{
-	struct sierra_port_private *portdata;
-
-	portdata = usb_get_serial_port_data(port);
-	kfree(portdata);
-
-	return 0;
+	kfree(serial->private);
 }
 
 #ifdef CONFIG_PM

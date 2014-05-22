@@ -58,10 +58,36 @@ static int ehci_platform_reset(struct usb_hcd *hcd)
 	return 0;
 }
 
-static struct hc_driver __read_mostly ehci_platform_hc_driver;
+static const struct hc_driver ehci_platform_hc_driver = {
+	.description		= hcd_name,
+	.product_desc		= "Generic Platform EHCI Controller",
+	.hcd_priv_size		= sizeof(struct ehci_hcd),
 
-static const struct ehci_driver_overrides platform_overrides __initconst = {
-	.reset =	ehci_platform_reset,
+	.irq			= ehci_irq,
+	.flags			= HCD_MEMORY | HCD_USB2,
+
+	.reset			= ehci_platform_reset,
+	.start			= ehci_run,
+	.stop			= ehci_stop,
+	.shutdown		= ehci_shutdown,
+
+	.urb_enqueue		= ehci_urb_enqueue,
+	.urb_dequeue		= ehci_urb_dequeue,
+	.endpoint_disable	= ehci_endpoint_disable,
+	.endpoint_reset		= ehci_endpoint_reset,
+
+	.get_frame_number	= ehci_get_frame,
+
+	.hub_status_data	= ehci_hub_status_data,
+	.hub_control		= ehci_hub_control,
+#if defined(CONFIG_PM)
+	.bus_suspend		= ehci_bus_suspend,
+	.bus_resume		= ehci_bus_resume,
+#endif
+	.relinquish_port	= ehci_relinquish_port,
+	.port_handed_over	= ehci_port_handed_over,
+
+	.clear_tt_buffer_complete = ehci_clear_tt_buffer_complete,
 };
 
 static struct usb_ehci_pdata ehci_platform_defaults;

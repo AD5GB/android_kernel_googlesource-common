@@ -296,7 +296,11 @@ eem_bind(struct usb_configuration *c, struct usb_function *f)
 	return 0;
 
 fail:
-	usb_free_all_descriptors(f);
+	if (f->descriptors)
+		usb_free_descriptors(f->descriptors);
+	if (f->hs_descriptors)
+		usb_free_descriptors(f->hs_descriptors);
+
 	if (eem->port.out_ep)
 		eem->port.out_ep->driver_data = NULL;
 	if (eem->port.in_ep)

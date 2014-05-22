@@ -353,12 +353,10 @@ void ext4_da_update_reserve_space(struct inode *inode,
 	}
 
 	if (unlikely(ei->i_allocated_meta_blocks > ei->i_reserved_meta_blocks)) {
-		ext4_warning(inode->i_sb, "ino %lu, allocated %d "
-			"with only %d reserved metadata blocks "
-			"(releasing %d blocks with reserved %d data blocks)",
-			inode->i_ino, ei->i_allocated_meta_blocks,
-			     ei->i_reserved_meta_blocks, used,
-			     ei->i_reserved_data_blocks);
+		ext4_msg(inode->i_sb, KERN_NOTICE, "%s: ino %lu, allocated %d "
+			 "with only %d reserved metadata blocks\n", __func__,
+			 inode->i_ino, ei->i_allocated_meta_blocks,
+			 ei->i_reserved_meta_blocks);
 		WARN_ON(1);
 		ei->i_allocated_meta_blocks = ei->i_reserved_meta_blocks;
 	}
@@ -1264,55 +1262,6 @@ static int ext4_da_reserve_metadata(struct inode *inode, ext4_lblk_t lblock)
 	struct ext4_sb_info *sbi = EXT4_SB(inode->i_sb);
 	struct ext4_inode_info *ei = EXT4_I(inode);
 	unsigned int md_needed;
-	ext4_lblk_t save_last_lblock;
-	int save_len;
-
-	/*
-	 * recalculate the amount of metadata blocks to reserve
-	 * in order to allocate nrblocks
-	 * worse case is one extent per block
-	 */
-repeat:
-	spin_lock(&ei->i_block_reservation_lock);
-	/*
-	 * ext4_calc_metadata_amount() has side effects, which we have
-	 * to be prepared undo if we fail to claim space.
-	 */
-	save_len = ei->i_da_metadata_calc_len;
-	save_last_lblock = ei->i_da_metadata_calc_last_lblock;
-	md_needed = EXT4_NUM_B2C(sbi,
-				 ext4_calc_metadata_amount(inode, lblock));
-	trace_ext4_da_reserve_space(inode, md_needed);
-
-	/*
-	 * We do still charge estimated metadata to the sb though;
-	 * we cannot afford to run out of free blocks.
-	 */
-	if (ext4_claim_free_clusters(sbi, md_needed, 0)) {
-		ei->i_da_metadata_calc_len = save_len;
-		ei->i_da_metadata_calc_last_lblock = save_last_lblock;
-		spin_unlock(&ei->i_block_reservation_lock);
-		if (ext4_should_retry_alloc(inode->i_sb, &retries)) {
-			cond_resched();
-			goto repeat;
-		}
-		return -ENOSPC;
-	}
-	ei->i_reserved_meta_blocks += md_needed;
-	spin_unlock(&ei->i_block_reservation_lock);
-
-	return 0;       /* success */
-}
-
-/*
- * Reserve a single cluster located at lblock
- */
-static int ext4_da_reserve_space(struct inode *inode, ext4_lblk_t lblock)
-{
-	int retries = 0;
-	struct ext4_sb_info *sbi = EXT4_SB(inode->i_sb);
-	struct ext4_inode_info *ei = EXT4_I(inode);
-	unsigned int md_needed;
 	int ret;
 	ext4_lblk_t save_last_lblock;
 	int save_len;
@@ -1342,6 +1291,22 @@ repeat:
 	md_needed = EXT4_NUM_B2C(sbi,
 				 ext4_calc_metadata_amount(inode, lblock));
 	trace_ext4_da_reserve_space(inode, md_needed);
+
+	return 0;       /* success */
+}
+
+/*
+ * Reserve a single cluster located at lblock
+ */
+static int ext4_da_reserve_space(struct inode *inode, ext4_lblk_t lblock)
+{
+	int retries = 0;
+	struct ext4_sb_info *sbi = EXT4_SB(inode->i_sb);
+	struct ext4_inode_info *ei = EXT4_I(inode);
+	unsigned int md_needed;
+	int ret;
+	ext4_lblk_t save_last_lblock;
+	int save_len;
 
 	/*
 	 * We do still charge estimated metadata to the sb though;
@@ -1590,10 +1555,6 @@ static void ext4_da_block_invalidatepages(struct mpage_da_data *mpd)
 
 	index = mpd->first_page;
 	end   = mpd->next_page - 1;
-
-	start = index << (PAGE_CACHE_SHIFT - inode->i_blkbits);
-	last = end << (PAGE_CACHE_SHIFT - inode->i_blkbits);
-	ext4_es_remove_extent(inode, start, last - start + 1);
 
 	pagevec_init(&pvec, 0);
 	while (index <= end) {
@@ -2634,18 +2595,21 @@ static int ext4_nonda_switch(struct super_block *sb)
 	 * Delalloc need an accurate free block accounting. So switch
 	 * to non delalloc when we are near to error range.
 	 */
-	free_clusters =
-		percpu_counter_read_positive(&sbi->s_freeclusters_counter);
-	dirty_clusters =
-		percpu_counter_read_positive(&sbi->s_dirtyclusters_counter);
+	free_blocks  = EXT4_C2B(sbi,
+		percpu_counter_read_positive(&sbi->s_freeclusters_counter));
+	dirty_blocks = percpu_counter_read_positive(&sbi->s_dirtyclusters_counter);
 	/*
 	 * Start pushing delalloc when 1/2 of free blocks are dirty.
 	 */
-	if (dirty_clusters && (free_clusters < 2 * dirty_clusters))
-		try_to_writeback_inodes_sb(sb, WB_REASON_FS_FREE_SPACE);
+	if (dirty_blocks && (free_blocks < 2 * dirty_blocks) &&
+	    !writeback_in_progress(sb->s_bdi) &&
+	    down_read_trylock(&sb->s_umount)) {
+		writeback_inodes_sb(sb, WB_REASON_FS_FREE_SPACE);
+		up_read(&sb->s_umount);
+	}
 
-	if (2 * free_clusters < 3 * dirty_clusters ||
-	    free_clusters < (dirty_clusters + EXT4_FREECLUSTERS_WATERMARK)) {
+	if (2 * free_blocks < 3 * dirty_blocks ||
+		free_blocks < (dirty_blocks + EXT4_FREECLUSTERS_WATERMARK)) {
 		/*
 		 * free block count is less than 150% of dirty blocks
 		 * or free blocks is less than watermark
@@ -4412,8 +4376,6 @@ static int ext4_do_update_inode(handle_t *handle,
 	struct buffer_head *bh = iloc->bh;
 	int err = 0, rc, block;
 	int need_datasync = 0;
-	uid_t i_uid;
-	gid_t i_gid;
 
 	/* For fields not not tracking in the in-memory inode,
 	 * initialise them to zero for new inodes. */
@@ -4805,7 +4767,7 @@ int ext4_getattr(struct vfsmount *mnt, struct dentry *dentry,
 		 struct kstat *stat)
 {
 	struct inode *inode;
-	unsigned long delalloc_blocks;
+	unsigned long long delalloc_blocks;
 
 	inode = dentry->d_inode;
 	generic_fillattr(inode, stat);
@@ -4823,7 +4785,7 @@ int ext4_getattr(struct vfsmount *mnt, struct dentry *dentry,
 	delalloc_blocks = EXT4_C2B(EXT4_SB(inode->i_sb),
 				EXT4_I(inode)->i_reserved_data_blocks);
 
-	stat->blocks += (delalloc_blocks << inode->i_sb->s_blocksize_bits)>>9;
+	stat->blocks += delalloc_blocks << (inode->i_sb->s_blocksize_bits-9);
 	return 0;
 }
 

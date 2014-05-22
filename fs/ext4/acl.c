@@ -422,8 +422,7 @@ ext4_xattr_set_acl(struct dentry *dentry, const char *name, const void *value,
 		acl = NULL;
 
 retry:
-	handle = ext4_journal_start(inode, EXT4_HT_XATTR,
-				    ext4_jbd2_credits_xattr(inode));
+	handle = ext4_journal_start(inode, EXT4_DATA_TRANS_BLOCKS(inode->i_sb));
 	if (IS_ERR(handle)) {
 		error = PTR_ERR(handle);
 		goto release_and_out;

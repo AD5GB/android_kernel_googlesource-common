@@ -55,7 +55,7 @@ static cycles_t cycles;
 static unsigned int persistent_mult, persistent_shift;
 static DEFINE_SPINLOCK(read_persistent_clock_lock);
 
-static void omap_read_persistent_clock(struct timespec *ts)
+void read_persistent_clock(struct timespec *ts)
 {
 	unsigned long long nsecs;
 	cycles_t last_cycles;
@@ -64,7 +64,7 @@ static void omap_read_persistent_clock(struct timespec *ts)
 	spin_lock_irqsave(&read_persistent_clock_lock, flags);
 
 	last_cycles = cycles;
-	cycles = sync32k_cnt_reg ? __raw_readl(sync32k_cnt_reg) : 0;
+	cycles = timer_32k_base ? __raw_readl(timer_32k_base) : 0;
 
 	nsecs = clocksource_cyc2ns(cycles - last_cycles,
 					persistent_mult, persistent_shift);

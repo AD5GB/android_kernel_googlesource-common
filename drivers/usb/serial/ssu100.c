@@ -431,6 +431,8 @@ static void ssu100_dtr_rts(struct usb_serial_port *port, int on)
 {
 	struct usb_device *dev = port->serial->dev;
 
+	dbg("%s\n", __func__);
+
 	/* Disable flow control */
 	if (!on) {
 		if (ssu100_setregister(dev, 0, UART_MCR, 0) < 0)

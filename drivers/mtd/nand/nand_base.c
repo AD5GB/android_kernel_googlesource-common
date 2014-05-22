@@ -2911,6 +2911,8 @@ static int nand_flash_detect_onfi(struct mtd_info *mtd, struct nand_chip *chip,
 	if (le16_to_cpu(p->features) & 1)
 		*busw = NAND_BUSWIDTH_16;
 
+	chip->options |= NAND_NO_READRDY | NAND_NO_AUTOINCR;
+
 	pr_info("ONFI flash detected\n");
 	return 1;
 }

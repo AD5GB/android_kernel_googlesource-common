@@ -721,12 +721,6 @@ static int raid10_mergeable_bvec(struct request_queue *q,
 		} on_stack;
 		struct r10bio *r10_bio = &on_stack.r10_bio;
 		int s;
-		if (conf->reshape_progress != MaxSector) {
-			/* Cannot give any guidance during reshape */
-			if (max <= biovec->bv_len && bio_sectors == 0)
-				return biovec->bv_len;
-			return 0;
-		}
 		r10_bio->sector = sector;
 		raid10_find_phys(conf, r10_bio);
 		rcu_read_lock();
@@ -1082,10 +1076,10 @@ static void freeze_array(struct r10conf *conf, int extra)
 	spin_lock_irq(&conf->resync_lock);
 	conf->barrier++;
 	conf->nr_waiting++;
-	wait_event_lock_irq_cmd(conf->wait_barrier,
-				conf->nr_pending == conf->nr_queued+extra,
-				conf->resync_lock,
-				flush_pending_writes(conf));
+	wait_event_lock_irq(conf->wait_barrier,
+			    conf->nr_pending == conf->nr_queued+extra,
+			    conf->resync_lock,
+			    flush_pending_writes(conf));
 
 	spin_unlock_irq(&conf->resync_lock);
 }
@@ -1517,34 +1511,17 @@ retry_write:
 			r10_bio->devs[i].bio = mbio;
 
 			mbio->bi_sector	= (r10_bio->devs[i].addr+
-					   choose_data_offset(r10_bio,
-							      rdev));
+					   rdev->data_offset);
 			mbio->bi_bdev = rdev->bdev;
 			mbio->bi_end_io	= raid10_end_write_request;
-			mbio->bi_rw =
-				WRITE | do_sync | do_fua | do_discard | do_same;
+			mbio->bi_rw = WRITE | do_sync | do_fua;
 			mbio->bi_private = r10_bio;
 
 			atomic_inc(&r10_bio->remaining);
-
-			cb = blk_check_plugged(raid10_unplug, mddev,
-					       sizeof(*plug));
-			if (cb)
-				plug = container_of(cb, struct raid10_plug_cb,
-						    cb);
-			else
-				plug = NULL;
 			spin_lock_irqsave(&conf->device_lock, flags);
-			if (plug) {
-				bio_list_add(&plug->pending, mbio);
-				plug->pending_cnt++;
-			} else {
-				bio_list_add(&conf->pending_bio_list, mbio);
-				conf->pending_count++;
-			}
+			bio_list_add(&conf->pending_bio_list, mbio);
+			conf->pending_count++;
 			spin_unlock_irqrestore(&conf->device_lock, flags);
-			if (!plug)
-				md_wakeup_thread(mddev->thread);
 		}
 
 		if (r10_bio->devs[i].repl_bio) {
@@ -1559,13 +1536,11 @@ retry_write:
 				    max_sectors);
 			r10_bio->devs[i].repl_bio = mbio;
 
-			mbio->bi_sector	= (r10_bio->devs[i].addr +
-					   choose_data_offset(
-						   r10_bio, rdev));
+			mbio->bi_sector	= (r10_bio->devs[i].addr+
+					   rdev->data_offset);
 			mbio->bi_bdev = rdev->bdev;
 			mbio->bi_end_io	= raid10_end_write_request;
-			mbio->bi_rw =
-				WRITE | do_sync | do_fua | do_discard | do_same;
+			mbio->bi_rw = WRITE | do_sync | do_fua;
 			mbio->bi_private = r10_bio;
 
 			atomic_inc(&r10_bio->remaining);
@@ -1573,8 +1548,6 @@ retry_write:
 			bio_list_add(&conf->pending_bio_list, mbio);
 			conf->pending_count++;
 			spin_unlock_irqrestore(&conf->device_lock, flags);
-			if (!mddev_check_plugged(mddev))
-				md_wakeup_thread(mddev->thread);
 		}
 	}
 
@@ -2262,12 +2235,18 @@ static void recovery_request_write(struct mddev *mddev, struct r10bio *r10_bio)
 	d = r10_bio->devs[1].devnum;
 	wbio = r10_bio->devs[1].bio;
 	wbio2 = r10_bio->devs[1].repl_bio;
+	/* Need to test wbio2->bi_end_io before we call
+	 * generic_make_request as if the former is NULL,
+	 * the latter is free to free wbio2.
+	 */
+	if (wbio2 && !wbio2->bi_end_io)
+		wbio2 = NULL;
 	if (wbio->bi_end_io) {
 		atomic_inc(&conf->mirrors[d].rdev->nr_pending);
 		md_sync_acct(conf->mirrors[d].rdev->bdev, bio_sectors(wbio));
 		generic_make_request(wbio);
 	}
-	if (wbio2 && wbio2->bi_end_io) {
+	if (wbio2) {
 		atomic_inc(&conf->mirrors[d].replacement->nr_pending);
 		md_sync_acct(conf->mirrors[d].replacement->bdev,
 			     bio_sectors(wbio2));
@@ -3629,9 +3608,7 @@ static int run(struct mddev *mddev)
 	}
 
 	rdev_for_each(rdev, mddev) {
-		long long diff;
 		struct request_queue *q;
-
 		disk_idx = rdev->raid_disk;
 		if (disk_idx < 0)
 			continue;
@@ -3652,17 +3629,9 @@ static int run(struct mddev *mddev)
 		q = bdev_get_queue(rdev->bdev);
 		if (q->merge_bvec_fn)
 			mddev->merge_check_needed = 1;
-		diff = (rdev->new_data_offset - rdev->data_offset);
-		if (!mddev->reshape_backwards)
-			diff = -diff;
-		if (diff < 0)
-			diff = 0;
-		if (first || diff < min_offset_diff)
-			min_offset_diff = diff;
 
-		if (mddev->gendisk)
-			disk_stack_limits(mddev->gendisk, rdev->bdev,
-					  rdev->data_offset << 9);
+		disk_stack_limits(mddev->gendisk, rdev->bdev,
+				  rdev->data_offset << 9);
 
 		disk->head_position = 0;
 

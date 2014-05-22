@@ -243,7 +243,7 @@ static inline void play_dead(void)
 #ifdef CONFIG_X86_64
 void enter_idle(void)
 {
-	this_cpu_write(is_idle, 1);
+	percpu_write(is_idle, 1);
 	idle_notifier_call_chain(IDLE_START);
 }
 

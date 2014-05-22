@@ -3154,13 +3154,8 @@ __unregister_ftrace_function_probe(char *glob, struct ftrace_probe_ops *ops,
 					continue;
 			}
 
-			rec_entry = ftrace_lookup_ip(hash, entry->ip);
-			/* It is possible more than one entry had this ip */
-			if (rec_entry)
-				free_hash_entry(hash, rec_entry);
-
 			hlist_del_rcu(&entry->node);
-			list_add(&entry->free_list, &free_list);
+			call_rcu_sched(&entry->rcu, ftrace_free_entry_rcu);
 		}
 	}
 	mutex_lock(&ftrace_lock);

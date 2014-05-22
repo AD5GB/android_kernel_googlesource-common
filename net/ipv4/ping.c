@@ -248,14 +248,14 @@ static void inet_get_ping_group_range_net(struct net *net, kgid_t *low,
 int ping_init_sock(struct sock *sk)
 {
 	struct net *net = sock_net(sk);
-	kgid_t group = current_egid();
+	gid_t group = current_egid();
+	gid_t range[2];
 	struct group_info *group_info;
 	int i, j, count;
-	kgid_t low, high;
 	int ret = 0;
 
-	inet_get_ping_group_range_net(net, &low, &high);
-	if (gid_lte(low, group) && gid_lte(group, high))
+	inet_get_ping_group_range_net(net, range, range+1);
+	if (range[0] <= group && group <= range[1])
 		return 0;
 
 	group_info = get_current_groups();
@@ -263,8 +263,8 @@ int ping_init_sock(struct sock *sk)
 	for (i = 0; i < group_info->nblocks; i++) {
 		int cp_count = min_t(int, NGROUPS_PER_BLOCK, count);
 		for (j = 0; j < cp_count; j++) {
-			kgid_t gid = group_info->blocks[i][j];
-			if (gid_lte(low, gid) && gid_lte(gid, high))
+			group = group_info->blocks[i][j];
+			if (range[0] <= group && group <= range[1])
 				goto out_release_group;
 		}
 
@@ -475,6 +475,8 @@ void ping_err(struct sk_buff *skb, int offset, u32 info)
 	int err;
 
 	if (skb->protocol == htons(ETH_P_IP)) {
+		struct iphdr *iph = (struct iphdr *)skb->data;
+		offset = iph->ihl << 2;
 		family = AF_INET;
 		type = icmp_hdr(skb)->type;
 		code = icmp_hdr(skb)->code;
@@ -516,8 +518,7 @@ void ping_err(struct sk_buff *skb, int offset, u32 info)
 			break;
 		case ICMP_SOURCE_QUENCH:
 			/* This is not a real error but ping wants to see it.
-			 * Report it with some fake errno.
-			 */
+			 * Report it with some fake errno. */
 			err = EREMOTEIO;
 			break;
 		case ICMP_PARAMETERPROB:
@@ -526,7 +527,6 @@ void ping_err(struct sk_buff *skb, int offset, u32 info)
 			break;
 		case ICMP_DEST_UNREACH:
 			if (code == ICMP_FRAG_NEEDED) { /* Path MTU discovery */
-				ipv4_sk_update_pmtu(skb, sk, info);
 				if (inet_sock->pmtudisc != IP_PMTUDISC_DONT) {
 					err = EMSGSIZE;
 					harderr = 1;
@@ -542,7 +542,6 @@ void ping_err(struct sk_buff *skb, int offset, u32 info)
 			break;
 		case ICMP_REDIRECT:
 			/* See ICMP_SOURCE_QUENCH */
-			ipv4_sk_redirect(skb, sk);
 			err = EREMOTEIO;
 			break;
 		}
@@ -577,6 +576,11 @@ out:
 	sock_put(sk);
 }
 EXPORT_SYMBOL_GPL(ping_err);
+
+void ping_v4_err(struct sk_buff *skb, u32 info)
+{
+	ping_err(skb, 0, info);
+}
 
 /*
  *	Copy and checksum an ICMP Echo packet from user space into a buffer
@@ -904,14 +908,15 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 			sin6->sin6_addr = ip6->saddr;
 			sin6->sin6_flowinfo = 0;
 			if (np->sndflow)
-				sin6->sin6_flowinfo = ip6_flowinfo(ip6);
+				sin6->sin6_flowinfo =
+					*(__be32 *)ip6 & IPV6_FLOWINFO_MASK;
 			sin6->sin6_scope_id =
 				ipv6_iface_scope_id(&sin6->sin6_addr,
 						    IP6CB(skb)->iif);
 		}
 
 		if (inet6_sk(sk)->rxopt.all)
-			pingv6_ops.ip6_datagram_recv_ctl(sk, msg, skb);
+			pingv6_ops.datagram_recv_ctl(sk, msg, skb);
 #endif
 	} else {
 		BUG();
@@ -985,7 +990,6 @@ struct proto ping_prot = {
 	.recvmsg =	ping_recvmsg,
 	.bind =		ping_bind,
 	.backlog_rcv =	ping_queue_rcv_skb,
-	.release_cb =	ip4_datagram_release_cb,
 	.hash =		ping_hash,
 	.unhash =	ping_unhash,
 	.get_port =	ping_get_port,

@@ -272,48 +272,22 @@ static const struct intel_device_info intel_sandybridge_m_info = {
 	.has_force_wake = 1
 
 static const struct intel_device_info intel_ivybridge_d_info = {
-	GEN7_FEATURES,
-	.is_ivybridge = 1,
+	.is_ivybridge = 1, .gen = 7,
+	.need_gfx_hws = 1, .has_hotplug = 1,
+	.has_bsd_ring = 1,
+	.has_blt_ring = 1,
+	.has_llc = 1,
+	.has_force_wake = 1,
 };
 
 static const struct intel_device_info intel_ivybridge_m_info = {
-	GEN7_FEATURES,
-	.is_ivybridge = 1,
-	.is_mobile = 1,
-};
-
-static const struct intel_device_info intel_ivybridge_q_info = {
-	GEN7_FEATURES,
-	.is_ivybridge = 1,
-	.num_pipes = 0, /* legal, last one wins */
-};
-
-static const struct intel_device_info intel_valleyview_m_info = {
-	GEN7_FEATURES,
-	.is_mobile = 1,
-	.num_pipes = 2,
-	.is_valleyview = 1,
-	.display_mmio_offset = VLV_DISPLAY_BASE,
-	.has_llc = 0, /* legal, last one wins */
-};
-
-static const struct intel_device_info intel_valleyview_d_info = {
-	GEN7_FEATURES,
-	.num_pipes = 2,
-	.is_valleyview = 1,
-	.display_mmio_offset = VLV_DISPLAY_BASE,
-	.has_llc = 0, /* legal, last one wins */
-};
-
-static const struct intel_device_info intel_haswell_d_info = {
-	GEN7_FEATURES,
-	.is_haswell = 1,
-};
-
-static const struct intel_device_info intel_haswell_m_info = {
-	GEN7_FEATURES,
-	.is_haswell = 1,
-	.is_mobile = 1,
+	.is_ivybridge = 1, .gen = 7, .is_mobile = 1,
+	.need_gfx_hws = 1, .has_hotplug = 1,
+	.has_fbc = 0,	/* FBC is not enabled on Ivybridge mobile yet */
+	.has_bsd_ring = 1,
+	.has_blt_ring = 1,
+	.has_llc = 1,
+	.has_force_wake = 1,
 };
 
 static const struct pci_device_id pciidlist[] = {		/* aka */
@@ -1213,37 +1187,8 @@ MODULE_LICENSE("GPL and additional rights");
 /* We give fast paths for the really cool registers */
 #define NEEDS_FORCE_WAKE(dev_priv, reg) \
 	((HAS_FORCE_WAKE((dev_priv)->dev)) && \
-	 ((reg) < 0x40000) &&            \
-	 ((reg) != FORCEWAKE))
-static void
-ilk_dummy_write(struct drm_i915_private *dev_priv)
-{
-	/* WaIssueDummyWriteToWakeupFromRC6: Issue a dummy write to wake up the
-	 * chip from rc6 before touching it for real. MI_MODE is masked, hence
-	 * harmless to write 0 into. */
-	I915_WRITE_NOTRACE(MI_MODE, 0);
-}
-
-static void
-hsw_unclaimed_reg_clear(struct drm_i915_private *dev_priv, u32 reg)
-{
-	if (IS_HASWELL(dev_priv->dev) &&
-	    (I915_READ_NOTRACE(FPGA_DBG) & FPGA_DBG_RM_NOCLAIM)) {
-		DRM_ERROR("Unknown unclaimed register before writing to %x\n",
-			  reg);
-		I915_WRITE_NOTRACE(FPGA_DBG, FPGA_DBG_RM_NOCLAIM);
-	}
-}
-
-static void
-hsw_unclaimed_reg_check(struct drm_i915_private *dev_priv, u32 reg)
-{
-	if (IS_HASWELL(dev_priv->dev) &&
-	    (I915_READ_NOTRACE(FPGA_DBG) & FPGA_DBG_RM_NOCLAIM)) {
-		DRM_ERROR("Unclaimed write to %x\n", reg);
-		I915_WRITE_NOTRACE(FPGA_DBG, FPGA_DBG_RM_NOCLAIM);
-	}
-}
+        ((reg) < 0x40000) &&            \
+        ((reg) != FORCEWAKE))
 
 #define __i915_read(x, y) \
 u##x i915_read##x(struct drm_i915_private *dev_priv, u32 reg) { \

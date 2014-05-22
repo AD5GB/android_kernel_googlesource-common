@@ -333,10 +333,6 @@ static DEFINE_PCI_DEVICE_TABLE(tg3_pci_tbl) = {
 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_5719)},
 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_5720)},
 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_57762)},
-	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_57766)},
-	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_5762)},
-	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_5725)},
-	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_5727)},
 	{PCI_DEVICE(PCI_VENDOR_ID_SYSKONNECT, PCI_DEVICE_ID_SYSKONNECT_9DXX)},
 	{PCI_DEVICE(PCI_VENDOR_ID_SYSKONNECT, PCI_DEVICE_ID_SYSKONNECT_9MXX)},
 	{PCI_DEVICE(PCI_VENDOR_ID_ALTIMA, PCI_DEVICE_ID_ALTIMA_AC1000)},
@@ -2373,7 +2369,7 @@ static void tg3_phy_eee_adjust(struct tg3 *tp, bool current_link_up)
 	}
 
 	if (!tp->setlpicnt) {
-		if (current_link_up &&
+		if (current_link_up == 1 &&
 		   !tg3_phy_toggle_auxctl_smdsp(tp, true)) {
 			tg3_phydsp_write(tp, MII_TG3_DSP_TAP26, 0x0000);
 			tg3_phy_toggle_auxctl_smdsp(tp, false);
@@ -4371,7 +4367,7 @@ static void tg3_phy_copper_begin(struct tg3 *tp)
 		tp->link_config.active_speed = tp->link_config.speed;
 		tp->link_config.active_duplex = tp->link_config.duplex;
 
-		if (tg3_asic_rev(tp) == ASIC_REV_5714) {
+		if (GET_ASIC_REV(tp->pci_chip_rev_id) == ASIC_REV_5714) {
 			/* With autoneg disabled, 5715 only links up when the
 			 * advertisement register has the configured speed
 			 * enabled.
@@ -9994,16 +9990,8 @@ static int tg3_reset_hw(struct tg3 *tp, bool reset_phy)
 	    tg3_asic_rev(tp) == ASIC_REV_5785 ||
 	    tg3_asic_rev(tp) == ASIC_REV_57780 ||
 	    tg3_flag(tp, 57765_PLUS)) {
-		u32 tgtreg;
-
-		if (tg3_asic_rev(tp) == ASIC_REV_5762)
-			tgtreg = TG3_RDMA_RSRVCTRL_REG2;
-		else
-			tgtreg = TG3_RDMA_RSRVCTRL_REG;
-
-		val = tr32(tgtreg);
-		if (tg3_chip_rev_id(tp) == CHIPREV_ID_5719_A0 ||
-		    tg3_asic_rev(tp) == ASIC_REV_5762) {
+		val = tr32(TG3_RDMA_RSRVCTRL_REG);
+		if (tp->pci_chip_rev_id == CHIPREV_ID_5719_A0) {
 			val &= ~(TG3_RDMA_RSRVCTRL_TXMRGN_MASK |
 				 TG3_RDMA_RSRVCTRL_FIFO_LWM_MASK |
 				 TG3_RDMA_RSRVCTRL_FIFO_HWM_MASK);
@@ -15872,19 +15860,8 @@ static int tg3_get_invariants(struct tg3 *tp, const struct pci_device_id *ent)
 		}
 	}
 
-	tp->txq_max = 1;
-	tp->rxq_max = 1;
-	if (tp->irq_max > 1) {
-		tp->rxq_max = TG3_RSS_MAX_NUM_QS;
-		tg3_rss_init_dflt_indir_tbl(tp, TG3_RSS_MAX_NUM_QS);
-
-		if (tg3_asic_rev(tp) == ASIC_REV_5719 ||
-		    tg3_asic_rev(tp) == ASIC_REV_5720)
-			tp->txq_max = tp->irq_max - 1;
-	}
-
 	if (tg3_flag(tp, 5755_PLUS) ||
-	    tg3_asic_rev(tp) == ASIC_REV_5906)
+	    GET_ASIC_REV(tp->pci_chip_rev_id) == ASIC_REV_5906)
 		tg3_flag_set(tp, SHORT_DMA_BUG);
 
 	if (tg3_asic_rev(tp) == ASIC_REV_5719)

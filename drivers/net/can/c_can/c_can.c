@@ -750,7 +750,7 @@ static void c_can_do_tx(struct net_device *dev)
 
 	for (/* nix */; (priv->tx_next - priv->tx_echo) > 0; priv->tx_echo++) {
 		msg_obj_no = get_tx_echo_msg_obj(priv);
-		val = c_can_read_reg32(priv, C_CAN_TXRQST1_REG);
+		val = c_can_read_reg32(priv, &priv->regs->txrqst1);
 		if (!(val & (1 << (msg_obj_no - 1)))) {
 			can_get_echo_skb(dev,
 					msg_obj_no - C_CAN_MSG_OBJ_TX_FIRST);
@@ -1087,7 +1087,7 @@ static irqreturn_t c_can_isr(int irq, void *dev_id)
 	struct net_device *dev = (struct net_device *)dev_id;
 	struct c_can_priv *priv = netdev_priv(dev);
 
-	priv->irqstatus = priv->read_reg(priv, C_CAN_INT_REG);
+	priv->irqstatus = priv->read_reg(priv, &priv->regs->interrupt);
 	if (!priv->irqstatus)
 		return IRQ_NONE;
 
@@ -1122,8 +1122,6 @@ static int c_can_open(struct net_device *dev)
 	}
 
 	napi_enable(&priv->napi);
-
-	can_led_event(dev, CAN_LED_EVENT_OPEN);
 
 	/* start the c_can controller */
 	c_can_start(dev);

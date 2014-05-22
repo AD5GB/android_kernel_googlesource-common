@@ -438,29 +438,6 @@ static int br_validate(struct nlattr *tb[], struct nlattr *data[])
 	return 0;
 }
 
-static size_t br_get_link_af_size(const struct net_device *dev)
-{
-	struct net_port_vlans *pv;
-
-	if (br_port_exists(dev))
-		pv = nbp_get_vlan_info(br_port_get_rcu(dev));
-	else if (dev->priv_flags & IFF_EBRIDGE)
-		pv = br_get_vlan_info((struct net_bridge *)netdev_priv(dev));
-	else
-		return 0;
-
-	if (!pv)
-		return 0;
-
-	/* Each VLAN is returned in bridge_vlan_info along with flags */
-	return pv->num_vlans * nla_total_size(sizeof(struct bridge_vlan_info));
-}
-
-static struct rtnl_af_ops br_af_ops = {
-	.family			= AF_BRIDGE,
-	.get_link_af_size	= br_get_link_af_size,
-};
-
 struct rtnl_link_ops br_link_ops __read_mostly = {
 	.kind		= "bridge",
 	.priv_size	= sizeof(struct net_bridge),

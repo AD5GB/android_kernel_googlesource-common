@@ -149,13 +149,23 @@ int drm_open(struct inode *inode, struct file *filp)
 	mutex_unlock(&dev->struct_mutex);
 
 	retcode = drm_open_helper(inode, filp, dev);
-	if (retcode)
-		goto err_undo;
-	atomic_inc(&dev->counts[_DRM_STAT_OPENS]);
-	if (need_setup) {
-		retcode = drm_setup(dev);
-		if (retcode)
-			goto err_undo;
+	if (!retcode) {
+		atomic_inc(&dev->counts[_DRM_STAT_OPENS]);
+		if (!dev->open_count++) {
+			retcode = drm_setup(dev);
+			if (retcode)
+				dev->open_count--;
+		}
+	}
+	if (!retcode) {
+		mutex_lock(&dev->struct_mutex);
+		if (minor->type == DRM_MINOR_LEGACY) {
+			if (dev->dev_mapping == NULL)
+				dev->dev_mapping = inode->i_mapping;
+			else if (dev->dev_mapping != inode->i_mapping)
+				retcode = -ENODEV;
+		}
+		mutex_unlock(&dev->struct_mutex);
 	}
 	return 0;
 

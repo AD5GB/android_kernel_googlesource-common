@@ -345,11 +345,23 @@ static int dm_tm_create_internal(struct dm_block_manager *bm,
 			goto bad;
 		}
 
+		*sm = dm_sm_checker_create(inner);
+		if (IS_ERR(*sm)) {
+			r = PTR_ERR(*sm);
+			goto bad2;
+		}
+
 	} else {
 		r = dm_sm_metadata_open(*sm, *tm, sm_root, sm_len);
 		if (r) {
 			DMERR("couldn't open metadata space map");
 			goto bad;
+		}
+
+		*sm = dm_sm_checker_create(inner);
+		if (IS_ERR(*sm)) {
+			r = PTR_ERR(*sm);
+			goto bad2;
 		}
 	}
 

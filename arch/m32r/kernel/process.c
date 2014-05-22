@@ -47,6 +47,51 @@ unsigned long thread_saved_pc(struct task_struct *tsk)
 void (*pm_power_off)(void) = NULL;
 EXPORT_SYMBOL(pm_power_off);
 
+/*
+ * We use this is we don't have any better
+ * idle routine..
+ */
+static void default_idle(void)
+{
+	/* M32R_FIXME: Please use "cpu_sleep" mode.  */
+	cpu_relax();
+}
+
+/*
+ * On SMP it's slightly faster (but much more power-consuming!)
+ * to poll the ->work.need_resched flag instead of waiting for the
+ * cross-CPU IPI to arrive. Use this option with caution.
+ */
+static void poll_idle (void)
+{
+	/* M32R_FIXME */
+	cpu_relax();
+}
+
+/*
+ * The idle thread. There's no useful work to be
+ * done, so just try to conserve power and have a
+ * low exit latency (ie sit in a loop waiting for
+ * somebody to say that they'd like to reschedule)
+ */
+void cpu_idle (void)
+{
+	/* endless idle loop with no priority at all */
+	while (1) {
+		rcu_idle_enter();
+		while (!need_resched()) {
+			void (*idle)(void) = pm_idle;
+
+			if (!idle)
+				idle = default_idle;
+
+			idle();
+		}
+		rcu_idle_exit();
+		schedule_preempt_disabled();
+	}
+}
+
 void machine_restart(char *__unused)
 {
 #if defined(CONFIG_PLAT_MAPPI3)

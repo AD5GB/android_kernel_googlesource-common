@@ -933,7 +933,20 @@ mwifiex_dump_station_info(struct mwifiex_private *priv,
 			      HostCmd_ACT_GEN_GET, DTIM_PERIOD_I,
 			      &priv->dtim_period);
 
-	mwifiex_parse_htinfo(priv, priv->tx_htinfo, &sinfo->txrate);
+	/*
+	 * Bit 0 in tx_htinfo indicates that current Tx rate is 11n rate. Valid
+	 * MCS index values for us are 0 to 15.
+	 */
+	if ((priv->tx_htinfo & BIT(0)) && (priv->tx_rate < 16)) {
+		sinfo->txrate.mcs = priv->tx_rate;
+		sinfo->txrate.flags |= RATE_INFO_FLAGS_MCS;
+		/* 40MHz rate */
+		if (priv->tx_htinfo & BIT(1))
+			sinfo->txrate.flags |= RATE_INFO_FLAGS_40_MHZ_WIDTH;
+		/* SGI enabled */
+		if (priv->tx_htinfo & BIT(2))
+			sinfo->txrate.flags |= RATE_INFO_FLAGS_SHORT_GI;
+	}
 
 	sinfo->signal_avg = priv->bcn_rssi_avg;
 	sinfo->rx_bytes = priv->stats.rx_bytes;
@@ -2055,6 +2068,10 @@ struct wireless_dev *mwifiex_add_virtual_intf(struct wiphy *wiphy,
 	void *mdev_priv;
 	struct wireless_dev *wdev;
 
+	if (!priv)
+		return ERR_PTR(-EFAULT);
+
+	adapter = priv->adapter;
 	if (!adapter)
 		return ERR_PTR(-EFAULT);
 
@@ -2064,8 +2081,8 @@ struct wireless_dev *mwifiex_add_virtual_intf(struct wiphy *wiphy,
 	case NL80211_IFTYPE_ADHOC:
 		priv = adapter->priv[MWIFIEX_BSS_TYPE_STA];
 		if (priv->bss_mode) {
-			wiphy_err(wiphy,
-				  "cannot create multiple sta/adhoc ifaces\n");
+			wiphy_err(wiphy, "cannot create multiple"
+					" station/adhoc interfaces\n");
 			return ERR_PTR(-EINVAL);
 		}
 
@@ -2211,7 +2228,7 @@ struct wireless_dev *mwifiex_add_virtual_intf(struct wiphy *wiphy,
 #ifdef CONFIG_DEBUG_FS
 	mwifiex_dev_debugfs_init(priv);
 #endif
-	return wdev;
+	return dev;
 }
 EXPORT_SYMBOL_GPL(mwifiex_add_virtual_intf);
 

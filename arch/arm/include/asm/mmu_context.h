@@ -27,7 +27,66 @@ void __check_vmalloc_seq(struct mm_struct *mm);
 void check_and_switch_context(struct mm_struct *mm, struct task_struct *tsk);
 #define init_new_context(tsk,mm)	({ atomic64_set(&mm->context.id, 0); 0; })
 
-DECLARE_PER_CPU(atomic64_t, active_asids);
+extern unsigned int cpu_last_asid;
+
+void __init_new_context(struct task_struct *tsk, struct mm_struct *mm);
+void __new_context(struct mm_struct *mm);
+void cpu_set_reserved_ttbr0(void);
+
+static inline void switch_new_context(struct mm_struct *mm)
+{
+	unsigned long flags;
+
+	__new_context(mm);
+
+	local_irq_save(flags);
+	cpu_switch_mm(mm->pgd, mm);
+	local_irq_restore(flags);
+}
+
+static inline void check_and_switch_context(struct mm_struct *mm,
+					    struct task_struct *tsk)
+{
+	if (unlikely(mm->context.kvm_seq != init_mm.context.kvm_seq))
+		__check_kvm_seq(mm);
+
+	/*
+	 * Required during context switch to avoid speculative page table
+	 * walking with the wrong TTBR.
+	 */
+	cpu_set_reserved_ttbr0();
+
+	if (!((mm->context.id ^ cpu_last_asid) >> ASID_BITS))
+		/*
+		 * The ASID is from the current generation, just switch to the
+		 * new pgd. This condition is only true for calls from
+		 * context_switch() and interrupts are already disabled.
+		 */
+		cpu_switch_mm(mm->pgd, mm);
+	else if (irqs_disabled())
+		/*
+		 * Defer the new ASID allocation until after the context
+		 * switch critical region since __new_context() cannot be
+		 * called with interrupts disabled (it sends IPIs).
+		 */
+		set_ti_thread_flag(task_thread_info(tsk), TIF_SWITCH_MM);
+	else
+		/*
+		 * That is a direct call to switch_mm() or activate_mm() with
+		 * interrupts enabled and a new context.
+		 */
+		switch_new_context(mm);
+}
+
+#define init_new_context(tsk,mm)	(__init_new_context(tsk,mm),0)
+
+#define finish_arch_post_lock_switch \
+	finish_arch_post_lock_switch
+static inline void finish_arch_post_lock_switch(void)
+{
+	if (test_and_clear_thread_flag(TIF_SWITCH_MM))
+		switch_new_context(current->mm);
+}
 
 #else	/* !CONFIG_CPU_HAS_ASID */
 
@@ -36,8 +95,8 @@ DECLARE_PER_CPU(atomic64_t, active_asids);
 static inline void check_and_switch_context(struct mm_struct *mm,
 					    struct task_struct *tsk)
 {
-	if (unlikely(mm->context.vmalloc_seq != init_mm.context.vmalloc_seq))
-		__check_vmalloc_seq(mm);
+	if (unlikely(mm->context.kvm_seq != init_mm.context.kvm_seq))
+		__check_kvm_seq(mm);
 
 	if (irqs_disabled())
 		/*

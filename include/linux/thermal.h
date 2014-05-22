@@ -181,6 +181,10 @@ struct thermal_zone_device {
 	struct list_head node;
 	struct delayed_work poll_queue;
 };
+/* Adding event notification support elements */
+#define THERMAL_GENL_FAMILY_NAME                "thermal_event"
+#define THERMAL_GENL_VERSION                    0x01
+#define THERMAL_GENL_MCAST_GROUP_NAME           "thermal_mc_grp"
 
 /* Structure that holds thermal governor information */
 struct thermal_governor {

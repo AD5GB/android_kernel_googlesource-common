@@ -2156,10 +2156,26 @@ static void cpuset_hotplug_workfn(struct work_struct *work)
 		update_tasks_nodemask(&top_cpuset, &tmp_mems, NULL);
 	}
 
-	/* if cpus or mems went down, we need to propagate to descendants */
-	if (cpus_offlined || mems_offlined) {
-		struct cpuset *cs;
-		struct cgroup *pos_cgrp;
+/*
+ * The top_cpuset tracks what CPUs and Memory Nodes are online,
+ * period.  This is necessary in order to make cpusets transparent
+ * (of no affect) on systems that are actively using CPU hotplug
+ * but making no active use of cpusets.
+ *
+ * The only exception to this is suspend/resume, where we don't
+ * modify cpusets at all.
+ *
+ * This routine ensures that top_cpuset.cpus_allowed tracks
+ * cpu_active_mask on each CPU hotplug (cpuhp) event.
+ *
+ * Called within get_online_cpus().  Needs to call cgroup_lock()
+ * before calling generate_sched_domains().
+ */
+void cpuset_update_active_cpus(void)
+{
+	struct sched_domain_attr *attr;
+	cpumask_var_t *doms;
+	int ndoms;
 
 		rcu_read_lock();
 		cpuset_for_each_descendant_pre(cs, pos_cgrp, &top_cpuset)
@@ -2556,6 +2572,15 @@ void cpuset_print_task_mems_allowed(struct task_struct *tsk)
 
 	rcu_read_lock();
 	spin_lock(&cpuset_buffer_lock);
+
+	if (!dentry) {
+		strcpy(cpuset_name, "/");
+	} else {
+		spin_lock(&dentry->d_lock);
+		strlcpy(cpuset_name, (const char *)dentry->d_name.name,
+			CPUSET_NAME_LEN);
+		spin_unlock(&dentry->d_lock);
+	}
 
 	nodelist_scnprintf(cpuset_nodelist, CPUSET_NODELIST_LEN,
 			   tsk->mems_allowed);

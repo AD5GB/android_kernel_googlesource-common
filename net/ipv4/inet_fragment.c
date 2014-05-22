@@ -328,9 +328,8 @@ struct inet_frag_queue *inet_frag_find(struct netns_frags *nf,
 {
 	struct inet_frag_bucket *hb;
 	struct inet_frag_queue *q;
+	struct hlist_node *n;
 	int depth = 0;
-
-	hb = &f->hash[hash];
 
 	spin_lock(&hb->chain_lock);
 	hlist_for_each_entry(q, &hb->chain, list) {

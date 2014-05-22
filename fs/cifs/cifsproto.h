@@ -214,15 +214,15 @@ extern int cifs_setup_session(const unsigned int xid, struct cifs_ses *ses,
 			      struct nls_table *nls_info);
 extern int CIFSSMBNegotiate(const unsigned int xid, struct cifs_ses *ses);
 
-extern int CIFSTCon(const unsigned int xid, struct cifs_ses *ses,
-		    const char *tree, struct cifs_tcon *tcon,
-		    const struct nls_table *);
-
-extern int CIFSFindFirst(const unsigned int xid, struct cifs_tcon *tcon,
-		const char *searchName, struct cifs_sb_info *cifs_sb,
+extern int CIFSFindFirst(const int xid, struct cifs_tcon *tcon,
+		const char *searchName, const struct nls_table *nls_codepage,
 		__u16 *searchHandle, __u16 search_flags,
 		struct cifs_search_info *psrch_inf,
-		bool msearch);
+		int map, const char dirsep);
+
+extern int CIFSFindNext(const int xid, struct cifs_tcon *tcon,
+		__u16 searchHandle, __u16 search_flags,
+		struct cifs_search_info *psrch_inf);
 
 extern int CIFSFindNext(const unsigned int xid, struct cifs_tcon *tcon,
 		__u16 searchHandle, __u16 search_flags,

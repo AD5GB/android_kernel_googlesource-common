@@ -278,7 +278,15 @@ __und_svc_fault:
 	mov	r0, sp				@ struct pt_regs *regs
 	bl	__und_fault
 
+	@
+	@ IRQs off again before pulling preserved data off the stack
+	@
 __und_svc_finish:
+	disable_irq_notrace
+
+	@
+	@ restore SPSR and restart the instruction
+	@
 	ldr	r5, [sp, #S_PSR]		@ Get SVC cpsr
 	svc_exit r5				@ return from exception
  UNWIND(.fnend		)

@@ -63,7 +63,7 @@ static DEFINE_PER_CPU(struct clock_event_device, comparators);
  */
 unsigned long long notrace __kprobes sched_clock(void)
 {
-	return tod_to_ns(get_tod_clock_monotonic());
+	return tod_to_ns(get_clock_monotonic());
 }
 
 /*

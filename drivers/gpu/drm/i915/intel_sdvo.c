@@ -947,8 +947,7 @@ static bool intel_sdvo_write_infoframe(struct intel_sdvo *intel_sdvo,
 				    &tx_rate, 1);
 }
 
-static bool intel_sdvo_set_avi_infoframe(struct intel_sdvo *intel_sdvo,
-					 const struct drm_display_mode *adjusted_mode)
+static bool intel_sdvo_set_avi_infoframe(struct intel_sdvo *intel_sdvo)
 {
 	struct dip_infoframe avi_if = {
 		.type = DIP_TYPE_AVI,
@@ -956,16 +955,6 @@ static bool intel_sdvo_set_avi_infoframe(struct intel_sdvo *intel_sdvo,
 		.len = DIP_LEN_AVI,
 	};
 	uint8_t sdvo_data[4 + sizeof(avi_if.body.avi)];
-	struct intel_crtc *intel_crtc = to_intel_crtc(intel_sdvo->base.base.crtc);
-
-	if (intel_sdvo->rgb_quant_range_selectable) {
-		if (intel_crtc->config.limited_color_range)
-			avi_if.body.avi.ITC_EC_Q_SC |= DIP_AVI_RGB_QUANT_RANGE_LIMITED;
-		else
-			avi_if.body.avi.ITC_EC_Q_SC |= DIP_AVI_RGB_QUANT_RANGE_FULL;
-	}
-
-	avi_if.body.avi.VIC = drm_match_cea_mode(adjusted_mode);
 
 	intel_dip_infoframe_csum(&avi_if);
 
@@ -2782,13 +2771,13 @@ bool intel_sdvo_init(struct drm_device *dev, uint32_t sdvo_reg, bool is_sdvob)
 
 	hotplug_mask = 0;
 	if (IS_G4X(dev)) {
-		hotplug_mask = intel_sdvo->is_sdvob ?
+		hotplug_mask = IS_SDVOB(sdvo_reg) ?
 			SDVOB_HOTPLUG_INT_STATUS_G4X : SDVOC_HOTPLUG_INT_STATUS_G4X;
 	} else if (IS_GEN4(dev)) {
-		hotplug_mask = intel_sdvo->is_sdvob ?
+		hotplug_mask = IS_SDVOB(sdvo_reg) ?
 			SDVOB_HOTPLUG_INT_STATUS_I965 : SDVOC_HOTPLUG_INT_STATUS_I965;
 	} else {
-		hotplug_mask = intel_sdvo->is_sdvob ?
+		hotplug_mask = IS_SDVOB(sdvo_reg) ?
 			SDVOB_HOTPLUG_INT_STATUS_I915 : SDVOC_HOTPLUG_INT_STATUS_I915;
 	}
 
@@ -2818,15 +2807,11 @@ bool intel_sdvo_init(struct drm_device *dev, uint32_t sdvo_reg, bool is_sdvob)
 			intel_sdvo->is_sdvob ?  HPD_SDVO_B : HPD_SDVO_C;
 	}
 
-	/*
-	 * Cloning SDVO with anything is often impossible, since the SDVO
-	 * encoder can request a special input timing mode. And even if that's
-	 * not the case we have evidence that cloning a plain unscaled mode with
-	 * VGA doesn't really work. Furthermore the cloning flags are way too
-	 * simplistic anyway to express such constraints, so just give up on
-	 * cloning for SDVO encoders.
+	/* Only enable the hotplug irq if we need it, to work around noisy
+	 * hotplug lines.
 	 */
-	intel_sdvo->base.cloneable = false;
+	if (intel_sdvo->hotplug_active[0])
+		dev_priv->hotplug_supported_mask |= hotplug_mask;
 
 	intel_sdvo_select_ddc_bus(dev_priv, intel_sdvo, sdvo_reg);
 

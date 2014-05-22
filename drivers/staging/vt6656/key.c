@@ -194,9 +194,16 @@ int KeybGetKey(PSKeyManagement pTable, u8 *pbyBSSID, u32 dwKeyIndex,
  * Return Value: true if success otherwise false
  *
  */
-int KeybSetKey(struct vnt_private *pDevice, PSKeyManagement pTable,
-	u8 *pbyBSSID, u32 dwKeyIndex, u32 uKeyLength, u64 *KeyRSC, u8 *pbyKey,
-	u8 byKeyDecMode)
+BOOL KeybSetKey(
+    void *pDeviceHandler,
+    PSKeyManagement pTable,
+    PBYTE           pbyBSSID,
+    DWORD           dwKeyIndex,
+	u32 uKeyLength,
+    PQWORD          pKeyRSC,
+    PBYTE           pbyKey,
+    BYTE            byKeyDecMode
+    )
 {
 	PSKeyItem   pKey;
 	int i, j, ii;
@@ -551,10 +558,15 @@ int KeybGetTransmitKey(PSKeyManagement pTable, u8 *pbyBSSID, u32 dwKeyType,
  * Return Value: true if success otherwise false
  *
  */
-
-int KeybSetDefaultKey(struct vnt_private *pDevice, PSKeyManagement pTable,
-	u32 dwKeyIndex, u32 uKeyLength, u64 *KeyRSC, u8 *pbyKey,
-	u8 byKeyDecMode)
+BOOL KeybSetDefaultKey(
+    void *pDeviceHandler,
+    PSKeyManagement pTable,
+    DWORD           dwKeyIndex,
+	u32 uKeyLength,
+    PQWORD          pKeyRSC,
+    PBYTE           pbyKey,
+    BYTE            byKeyDecMode
+    )
 {
 	int ii;
 	PSKeyItem pKey;
@@ -658,14 +670,24 @@ int KeybSetDefaultKey(struct vnt_private *pDevice, PSKeyManagement pTable,
  * Return Value: true if success otherwise false
  *
  */
-
-int KeybSetAllGroupKey(struct vnt_private *pDevice, PSKeyManagement pTable,
-	u32 dwKeyIndex, u32 uKeyLength, u64 *KeyRSC, u8 *pbyKey,
-	u8 byKeyDecMode)
+BOOL KeybSetAllGroupKey(
+    void *pDeviceHandler,
+    PSKeyManagement pTable,
+    DWORD           dwKeyIndex,
+	u32 uKeyLength,
+    PQWORD          pKeyRSC,
+    PBYTE           pbyKey,
+    BYTE            byKeyDecMode
+    )
 {
-	int i, ii;
-	PSKeyItem pKey;
-	u32 uKeyIdx;
+    PSDevice    pDevice = (PSDevice) pDeviceHandler;
+    int         i;
+    unsigned int        ii;
+    PSKeyItem   pKey;
+    unsigned int        uKeyIdx;
+
+	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Enter KeybSetAllGroupKey: %X\n",
+		dwKeyIndex);
 
 	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Enter KeybSetAllGroupKey: %X\n",
 		dwKeyIndex);

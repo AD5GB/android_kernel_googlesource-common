@@ -627,7 +627,7 @@ static void __init alloc_init_pte(pmd_t *pmd, unsigned long addr,
 	pte_t *pte = start_pte + pte_index(addr);
 
 	/* If replacing a section mapping, the whole section must be replaced */
-	BUG_ON(!pmd_none(*pmd) && pmd_bad(*pmd) && ((addr | end) & ~PMD_MASK));
+	BUG_ON(pmd_bad(*pmd) && ((addr | end) & ~PMD_MASK));
 
 	do {
 		set_pte_ext(pte, pfn_pte(pfn, __pgprot(type->prot_pte)), 0);
@@ -636,9 +636,10 @@ static void __init alloc_init_pte(pmd_t *pmd, unsigned long addr,
 	early_pte_install(pmd, start_pte, type->prot_l1);
 }
 
-static void __init __map_init_section(pmd_t *pmd, unsigned long addr,
-			unsigned long end, phys_addr_t phys,
-			const struct mem_type *type)
+static void __init alloc_init_section(pud_t *pud, unsigned long addr,
+				      unsigned long end, phys_addr_t phys,
+				      const struct mem_type *type,
+				      bool force_pages)
 {
 	pmd_t *p = pmd;
 
@@ -652,8 +653,12 @@ static void __init __map_init_section(pmd_t *pmd, unsigned long addr,
 	 * offset for odd 1MB sections.
 	 * (See arch/arm/include/asm/pgtable-2level.h)
 	 */
-	if (addr & SECTION_SIZE)
-		pmd++;
+	if (((addr | end | phys) & ~SECTION_MASK) == 0 && !force_pages) {
+		pmd_t *p = pmd;
+
+#ifndef CONFIG_ARM_LPAE
+		if (addr & SECTION_SIZE)
+			pmd++;
 #endif
 	do {
 		*pmd = __pmd(phys | type->prot_sect);
@@ -705,7 +710,7 @@ static void __init alloc_init_pud(pgd_t *pgd, unsigned long addr,
 
 	do {
 		next = pud_addr_end(addr, end);
-		alloc_init_pmd(pud, addr, next, phys, type, force_pages);
+		alloc_init_section(pud, addr, next, phys, type, force_pages);
 		phys += next - addr;
 	} while (pud++, addr = next, addr != end);
 }
@@ -852,8 +857,6 @@ void __init iotable_init(struct map_desc *io_desc, int nr)
 
 	for (md = io_desc; nr; md++, nr--) {
 		create_mapping(md, false);
-
-		vm = &svm->vm;
 		vm->addr = (void *)(md->virtual & PAGE_MASK);
 		vm->size = PAGE_ALIGN(md->length + (md->virtual & ~PAGE_MASK));
 		vm->phys_addr = __pfn_to_phys(md->pfn);
@@ -941,39 +944,77 @@ static void __init fill_pmd_gaps(void)
 	}
 }
 
+#ifndef CONFIG_ARM_LPAE
+
+/*
+ * The Linux PMD is made of two consecutive section entries covering 2MB
+ * (see definition in include/asm/pgtable-2level.h).  However a call to
+ * create_mapping() may optimize static mappings by using individual
+ * 1MB section mappings.  This leaves the actual PMD potentially half
+ * initialized if the top or bottom section entry isn't used, leaving it
+ * open to problems if a subsequent ioremap() or vmalloc() tries to use
+ * the virtual space left free by that unused section entry.
+ *
+ * Let's avoid the issue by inserting dummy vm entries covering the unused
+ * PMD halves once the static mappings are in place.
+ */
+
+static void __init pmd_empty_section_gap(unsigned long addr)
+{
+	struct vm_struct *vm;
+
+	vm = early_alloc_aligned(sizeof(*vm), __alignof__(*vm));
+	vm->addr = (void *)addr;
+	vm->size = SECTION_SIZE;
+	vm->flags = VM_IOREMAP | VM_ARM_EMPTY_MAPPING;
+	vm->caller = pmd_empty_section_gap;
+	vm_area_add_early(vm);
+}
+
+static void __init fill_pmd_gaps(void)
+{
+	struct vm_struct *vm;
+	unsigned long addr, next = 0;
+	pmd_t *pmd;
+
+	/* we're still single threaded hence no lock needed here */
+	for (vm = vmlist; vm; vm = vm->next) {
+		if (!(vm->flags & (VM_ARM_STATIC_MAPPING | VM_ARM_EMPTY_MAPPING)))
+			continue;
+		addr = (unsigned long)vm->addr;
+		if (addr < next)
+			continue;
+
+		/*
+		 * Check if this vm starts on an odd section boundary.
+		 * If so and the first section entry for this PMD is free
+		 * then we block the corresponding virtual address.
+		 */
+		if ((addr & ~PMD_MASK) == SECTION_SIZE) {
+			pmd = pmd_off_k(addr);
+			if (pmd_none(*pmd))
+				pmd_empty_section_gap(addr & PMD_MASK);
+		}
+
+		/*
+		 * Then check if this vm ends on an odd section boundary.
+		 * If so and the second section entry for this PMD is empty
+		 * then we block the corresponding virtual address.
+		 */
+		addr += vm->size;
+		if ((addr & ~PMD_MASK) == SECTION_SIZE) {
+			pmd = pmd_off_k(addr) + 1;
+			if (pmd_none(*pmd))
+				pmd_empty_section_gap(addr);
+		}
+
+		/* no need to look at any vm entry until we hit the next PMD */
+		next = (addr + PMD_SIZE - 1) & PMD_MASK;
+	}
+}
+
 #else
 #define fill_pmd_gaps() do { } while (0)
-#endif
-
-#if defined(CONFIG_PCI) && !defined(CONFIG_NEED_MACH_IO_H)
-static void __init pci_reserve_io(void)
-{
-	struct static_vm *svm;
-
-	svm = find_static_vm_vaddr((void *)PCI_IO_VIRT_BASE);
-	if (svm)
-		return;
-
-	vm_reserve_area_early(PCI_IO_VIRT_BASE, SZ_2M, pci_reserve_io);
-}
-#else
-#define pci_reserve_io() do { } while (0)
-#endif
-
-#ifdef CONFIG_DEBUG_LL
-void __init debug_ll_io_init(void)
-{
-	struct map_desc map;
-
-	debug_ll_addr(&map.pfn, &map.virtual);
-	if (!map.pfn || !map.virtual)
-		return;
-	map.pfn = __phys_to_pfn(map.pfn);
-	map.virtual &= PAGE_MASK;
-	map.length = PAGE_SIZE;
-	map.type = MT_DEVICE;
-	create_mapping(&map, false);
-}
 #endif
 
 static void * __initdata vmalloc_min =
@@ -1280,9 +1321,6 @@ static void __init devicemaps_init(struct machine_desc *mdesc)
 	if (mdesc->map_io)
 		mdesc->map_io();
 	fill_pmd_gaps();
-
-	/* Reserve fixed i/o space in VMALLOC region */
-	pci_reserve_io();
 
 	/*
 	 * Finally flush the caches and tlb to ensure that we're in a

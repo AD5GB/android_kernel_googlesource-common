@@ -302,6 +302,10 @@ static ssize_t reload_store(struct device *dev,
 	int cpu;
 	ssize_t ret = 0, tmp_ret;
 
+	/* allow reload only from the BSP */
+	if (boot_cpu_data.cpu_index != dev->id)
+		return -EINVAL;
+
 	ret = kstrtoul(buf, 0, &val);
 	if (ret)
 		return ret;
@@ -310,7 +314,6 @@ static ssize_t reload_store(struct device *dev,
 		return size;
 
 	get_online_cpus();
-	mutex_lock(&microcode_mutex);
 	for_each_online_cpu(cpu) {
 		tmp_ret = reload_for_cpu(cpu);
 		if (tmp_ret != 0)
@@ -320,9 +323,6 @@ static ssize_t reload_store(struct device *dev,
 		if (!ret)
 			ret = tmp_ret;
 	}
-	if (!ret)
-		perf_check_microcode();
-	mutex_unlock(&microcode_mutex);
 	put_online_cpus();
 
 	if (!ret)

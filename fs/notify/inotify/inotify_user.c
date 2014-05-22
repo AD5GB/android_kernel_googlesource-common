@@ -746,8 +746,8 @@ SYSCALL_DEFINE3(inotify_add_watch, int, fd, const char __user *, pathname,
 	if (unlikely(!(mask & ALL_INOTIFY_BITS)))
 		return -EINVAL;
 
-	f = fdget(fd);
-	if (unlikely(!f.file))
+	filp = fget_light(fd, &fput_needed);
+	if (unlikely(!filp))
 		return -EBADF;
 
 	/* verify that this is indeed an inotify instance */

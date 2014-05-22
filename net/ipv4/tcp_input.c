@@ -97,7 +97,7 @@ int sysctl_tcp_frto __read_mostly = 2;
 int sysctl_tcp_thin_dupack __read_mostly;
 
 int sysctl_tcp_moderate_rcvbuf __read_mostly = 1;
-int sysctl_tcp_early_retrans __read_mostly = 3;
+int sysctl_tcp_abc __read_mostly;
 int sysctl_tcp_default_init_rwnd __read_mostly = TCP_DEFAULT_INIT_RCVWND;
 
 #define FLAG_DATA		0x01 /* Incoming frame contained data.		*/
@@ -2752,7 +2752,7 @@ static void tcp_fastretrans_alert(struct sock *sk, int pkts_acked,
 	int do_lost = is_dupack || ((flag & FLAG_DATA_SACKED) &&
 				    (tcp_fackets_out(tp) > tp->reordering));
 	int newly_acked_sacked = 0;
-	int fast_rexmit = 0;
+	int fast_rexmit = 0, mib_idx;
 
 	if (WARN_ON(!tp->packets_out && tp->sacked_out))
 		tp->sacked_out = 0;
@@ -3300,12 +3300,59 @@ static void tcp_process_tlp_ack(struct sock *sk, u32 ack, int flag)
 			     !(flag & (FLAG_SND_UNA_ADVANCED |
 				       FLAG_NOT_DUP | FLAG_DATA_SACKED));
 
-	/* Mark the end of TLP episode on receiving TLP dupack or when
-	 * ack is after tlp_high_seq.
-	 */
-	if (is_tlp_dupack) {
-		tp->tlp_high_seq = 0;
-		return;
+	tcp_verify_left_out(tp);
+
+	/* Duplicate the behavior from Loss state (fastretrans_alert) */
+	if (flag & FLAG_DATA_ACKED)
+		inet_csk(sk)->icsk_retransmits = 0;
+
+	if ((flag & FLAG_NONHEAD_RETRANS_ACKED) ||
+	    ((tp->frto_counter >= 2) && (flag & FLAG_RETRANS_DATA_ACKED)))
+		tp->undo_marker = 0;
+
+	if (!before(tp->snd_una, tp->frto_highmark)) {
+		tcp_enter_frto_loss(sk, (tp->frto_counter == 1 ? 2 : 3), flag);
+		return 1;
+	}
+
+	if (!tcp_is_sackfrto(tp)) {
+		/* RFC4138 shortcoming in step 2; should also have case c):
+		 * ACK isn't duplicate nor advances window, e.g., opposite dir
+		 * data, winupdate
+		 */
+		if (!(flag & FLAG_ANY_PROGRESS) && (flag & FLAG_NOT_DUP))
+			return 1;
+
+		if (!(flag & FLAG_DATA_ACKED)) {
+			tcp_enter_frto_loss(sk, (tp->frto_counter == 1 ? 0 : 3),
+					    flag);
+			return 1;
+		}
+	} else {
+		if (!(flag & FLAG_DATA_ACKED) && (tp->frto_counter == 1)) {
+			if (!tcp_packets_in_flight(tp)) {
+				tcp_enter_frto_loss(sk, 2, flag);
+				return true;
+			}
+
+			/* Prevent sending of new data. */
+			tp->snd_cwnd = min(tp->snd_cwnd,
+					   tcp_packets_in_flight(tp));
+			return 1;
+		}
+
+		if ((tp->frto_counter >= 2) &&
+		    (!(flag & FLAG_FORWARD_PROGRESS) ||
+		     ((flag & FLAG_DATA_SACKED) &&
+		      !(flag & FLAG_ONLY_ORIG_SACKED)))) {
+			/* RFC4138 shortcoming (see comment above) */
+			if (!(flag & FLAG_FORWARD_PROGRESS) &&
+			    (flag & FLAG_NOT_DUP))
+				return 1;
+
+			tcp_enter_frto_loss(sk, 3, flag);
+			return 1;
+		}
 	}
 
 	if (after(ack, tp->tlp_high_seq)) {
@@ -3319,6 +3366,45 @@ static void tcp_process_tlp_ack(struct sock *sk, u32 ack, int flag)
 			NET_INC_STATS_BH(sock_net(sk),
 					 LINUX_MIB_TCPLOSSPROBERECOVERY);
 		}
+	}
+}
+
+/* RFC 5961 7 [ACK Throttling] */
+static void tcp_send_challenge_ack(struct sock *sk)
+{
+	/* unprotected vars, we dont care of overwrites */
+	static u32 challenge_timestamp;
+	static unsigned int challenge_count;
+	u32 now = jiffies / HZ;
+
+	if (now != challenge_timestamp) {
+		challenge_timestamp = now;
+		challenge_count = 0;
+	}
+	if (++challenge_count <= sysctl_tcp_challenge_ack_limit) {
+		NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_TCPCHALLENGEACK);
+		tcp_send_ack(sk);
+	}
+}
+
+static void tcp_store_ts_recent(struct tcp_sock *tp)
+{
+	tp->rx_opt.ts_recent = tp->rx_opt.rcv_tsval;
+	tp->rx_opt.ts_recent_stamp = get_seconds();
+}
+
+static void tcp_replace_ts_recent(struct tcp_sock *tp, u32 seq)
+{
+	if (tp->rx_opt.saw_tstamp && !after(seq, tp->rcv_wup)) {
+		/* PAWS bug workaround wrt. ACK frames, the PAWS discard
+		 * extra check below makes sure this can only happen
+		 * for pure ACK frames.  -DaveM
+		 *
+		 * Not only, also it occurs for expired timestamps.
+		 */
+
+		if (tcp_paws_check(&tp->rx_opt, 0))
+			tcp_store_ts_recent(tp);
 	}
 }
 
@@ -3337,6 +3423,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	int prior_sacked = tp->sacked_out;
 	int pkts_acked = 0;
 	int previous_packets_out = 0;
+	int frto_cwnd = 0;
 
 	/* If the ack is older than previous acks
 	 * then we can probably ignore it.
@@ -3415,6 +3502,12 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	flag |= tcp_clean_rtx_queue(sk, prior_fackets, prior_snd_una);
 
 	pkts_acked = previous_packets_out - tp->packets_out;
+
+	if (tp->frto_counter)
+		frto_cwnd = tcp_process_frto(sk, flag);
+	/* Guarantee sacktag reordering detection against wrap-arounds */
+	if (before(tp->frto_highmark, tp->snd_una))
+		tp->frto_highmark = 0;
 
 	if (tcp_ack_is_dubious(sk, flag)) {
 		/* Advance CWND, if state allows this. */
@@ -5261,7 +5354,8 @@ slow_path:
 		return 0;
 
 step5:
-	if (tcp_ack(sk, skb, FLAG_SLOWPATH | FLAG_UPDATE_TS_RECENT) < 0)
+	if (th->ack &&
+	    tcp_ack(sk, skb, FLAG_SLOWPATH | FLAG_UPDATE_TS_RECENT) < 0)
 		goto discard;
 
 	tcp_rcv_rtt_measure_ts(sk, skb);
@@ -5656,23 +5750,11 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
 		return 0;
 	}
 
-	req = tp->fastopen_rsk;
-	if (req != NULL) {
-		WARN_ON_ONCE(sk->sk_state != TCP_SYN_RECV &&
-		    sk->sk_state != TCP_FIN_WAIT1);
-
-		if (tcp_check_req(sk, skb, req, NULL, true) == NULL)
-			goto discard;
-	}
-
-	if (!th->ack && !th->rst)
-		goto discard;
-
 	if (!tcp_validate_incoming(sk, skb, th, 0))
 		return 0;
 
 	/* step 5: check the ACK field */
-	if (true) {
+	if (th->ack) {
 		int acceptable = tcp_ack(sk, skb, FLAG_SLOWPATH |
 						  FLAG_UPDATE_TS_RECENT) > 0;
 

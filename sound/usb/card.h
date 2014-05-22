@@ -125,12 +125,11 @@ struct snd_usb_substream {
 	unsigned int hwptr_done;	/* processed byte position in the buffer */
 	unsigned int transfer_done;		/* processed frames since last period update */
 
-	/* data and sync endpoints for this stream */
-	unsigned int ep_num;		/* the endpoint number */
-	struct snd_usb_endpoint *data_endpoint;
-	struct snd_usb_endpoint *sync_endpoint;
-	unsigned long flags;
-	bool need_setup_ep;		/* (re)configure EP at prepare? */
+	unsigned int nurbs;			/* # urbs */
+	struct snd_urb_ctx dataurb[MAX_URBS];	/* data urb table */
+	struct snd_urb_ctx syncurb[SYNC_URBS];	/* sync urb table */
+	char *syncbuf;				/* sync buffer for all sync URBs */
+	dma_addr_t sync_dma;			/* DMA address of syncbuf */
 	unsigned int speed;		/* USB_SPEED_XXX */
 
 	u64 formats;			/* format bitmasks (all or'ed) */

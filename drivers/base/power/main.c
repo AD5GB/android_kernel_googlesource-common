@@ -28,7 +28,6 @@
 #include <linux/sched.h>
 #include <linux/async.h>
 #include <linux/suspend.h>
-#include <linux/cpuidle.h>
 #include <linux/timer.h>
 
 #include "../base.h"
@@ -628,6 +627,7 @@ static int device_resume(struct device *dev, pm_message_t state, bool async)
 	pm_callback_t callback = NULL;
 	char *info = NULL;
 	int error = 0;
+	bool put = false;
 	struct dpm_watchdog wd;
 
 	TRACE_DEVICE(dev);
@@ -697,8 +697,6 @@ static int device_resume(struct device *dev, pm_message_t state, bool async)
  Unlock:
 	device_unlock(dev);
 	dpm_wd_clear(&wd);
-
- Complete:
 	complete_all(&dev->power.completion);
 
 	TRACE_RESUME(error);
@@ -1135,9 +1133,6 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 		goto Complete;
 	}
 
-	if (dev->power.syscore)
-		goto Complete;
-	
 	dpm_wd_set(&wd, dev);
 
 	device_lock(dev);
@@ -1194,6 +1189,11 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 	}
 
 	device_unlock(dev);
+
+	dpm_wd_clear(&wd);
+
+ Complete:
+	complete_all(&dev->power.completion);
 
 	dpm_wd_clear(&wd);
 

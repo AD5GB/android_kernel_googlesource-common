@@ -1137,7 +1137,8 @@ static inline ssize_t do_tty_write(
 		cond_resched();
 	}
 	if (written) {
-		tty_update_time(&file_inode(file)->i_mtime);
+		struct inode *inode = file->f_path.dentry->d_inode;
+		tty_update_time(&inode->i_mtime);
 		ret = written;
 	}
 out:

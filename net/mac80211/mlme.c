@@ -179,68 +179,16 @@ static int ecw2cw(int ecw)
 
 static u32 chandef_downgrade(struct cfg80211_chan_def *c)
 {
-	u32 ret;
-	int tmp;
-
-	switch (c->width) {
-	case NL80211_CHAN_WIDTH_20:
-		c->width = NL80211_CHAN_WIDTH_20_NOHT;
-		ret = IEEE80211_STA_DISABLE_HT | IEEE80211_STA_DISABLE_VHT;
-		break;
-	case NL80211_CHAN_WIDTH_40:
-		c->width = NL80211_CHAN_WIDTH_20;
-		c->center_freq1 = c->chan->center_freq;
-		ret = IEEE80211_STA_DISABLE_40MHZ |
-		      IEEE80211_STA_DISABLE_VHT;
-		break;
-	case NL80211_CHAN_WIDTH_80:
-		tmp = (30 + c->chan->center_freq - c->center_freq1)/20;
-		/* n_P40 */
-		tmp /= 2;
-		/* freq_P40 */
-		c->center_freq1 = c->center_freq1 - 20 + 40 * tmp;
-		c->width = NL80211_CHAN_WIDTH_40;
-		ret = IEEE80211_STA_DISABLE_VHT;
-		break;
-	case NL80211_CHAN_WIDTH_80P80:
-		c->center_freq2 = 0;
-		c->width = NL80211_CHAN_WIDTH_80;
-		ret = IEEE80211_STA_DISABLE_80P80MHZ |
-		      IEEE80211_STA_DISABLE_160MHZ;
-		break;
-	case NL80211_CHAN_WIDTH_160:
-		/* n_P20 */
-		tmp = (70 + c->chan->center_freq - c->center_freq1)/20;
-		/* n_P80 */
-		tmp /= 4;
-		c->center_freq1 = c->center_freq1 - 40 + 80 * tmp;
-		c->width = NL80211_CHAN_WIDTH_80;
-		ret = IEEE80211_STA_DISABLE_80P80MHZ |
-		      IEEE80211_STA_DISABLE_160MHZ;
-		break;
-	default:
-	case NL80211_CHAN_WIDTH_20_NOHT:
-		WARN_ON_ONCE(1);
-		c->width = NL80211_CHAN_WIDTH_20_NOHT;
-		ret = IEEE80211_STA_DISABLE_HT | IEEE80211_STA_DISABLE_VHT;
-		break;
-	}
-
-	WARN_ON_ONCE(!cfg80211_chandef_valid(c));
-
-	return ret;
-}
-
-static u32
-ieee80211_determine_chantype(struct ieee80211_sub_if_data *sdata,
-			     struct ieee80211_supported_band *sband,
-			     struct ieee80211_channel *channel,
-			     const struct ieee80211_ht_operation *ht_oper,
-			     const struct ieee80211_vht_operation *vht_oper,
-			     struct cfg80211_chan_def *chandef, bool verbose)
-{
-	struct cfg80211_chan_def vht_chandef;
-	u32 ht_cfreq, ret;
+	struct ieee80211_local *local = sdata->local;
+	struct ieee80211_supported_band *sband;
+	struct sta_info *sta;
+	u32 changed = 0;
+	int hti_cfreq;
+	u16 ht_opmode;
+	bool enable_ht = true, queues_stopped = false;
+	enum nl80211_channel_type prev_chantype;
+	enum nl80211_channel_type rx_channel_type = NL80211_CHAN_NO_HT;
+	enum nl80211_channel_type tx_channel_type;
 
 	chandef->chan = channel;
 	chandef->width = NL80211_CHAN_WIDTH_20_NOHT;
@@ -331,13 +279,15 @@ ieee80211_determine_chantype(struct ieee80211_sub_if_data *sdata,
 		goto out;
 	}
 
-	if (!cfg80211_chandef_valid(&vht_chandef)) {
-		if (verbose)
-			sdata_info(sdata,
-				   "AP VHT information is invalid, disable VHT\n");
-		ret = IEEE80211_STA_DISABLE_VHT;
-		goto out;
-	}
+	if (beacon_htcap_ie && (prev_chantype != rx_channel_type)) {
+		/*
+		 * Whenever the AP announces the HT mode change that can be
+		 * 40MHz intolerant or etc., it would be safer to stop tx
+		 * queues before doing hw config to avoid buffer overflow.
+		 */
+		ieee80211_stop_queues_by_reason(&sdata->local->hw,
+				IEEE80211_QUEUE_STOP_REASON_CHTYPE_CHANGE);
+		queues_stopped = true;
 
 	if (cfg80211_chandef_identical(chandef, &vht_chandef)) {
 		ret = 0;
@@ -354,146 +304,21 @@ ieee80211_determine_chantype(struct ieee80211_sub_if_data *sdata,
 
 	*chandef = vht_chandef;
 
-	ret = 0;
-
-out:
-	/* don't print the message below for VHT mismatch if VHT is disabled */
-	if (ret & IEEE80211_STA_DISABLE_VHT)
-		vht_chandef = *chandef;
-
-	while (!cfg80211_chandef_usable(sdata->local->hw.wiphy, chandef,
-					IEEE80211_CHAN_DISABLED)) {
-		if (WARN_ON(chandef->width == NL80211_CHAN_WIDTH_20_NOHT)) {
-			ret = IEEE80211_STA_DISABLE_HT |
-			      IEEE80211_STA_DISABLE_VHT;
-			goto out;
-		}
-
-		ret |= chandef_downgrade(chandef);
+	if (prev_chantype != tx_channel_type) {
+		rcu_read_lock();
+		sta = sta_info_get(sdata, bssid);
+		if (sta)
+			rate_control_rate_update(local, sband, sta,
+						 IEEE80211_RC_HT_CHANGED,
+						 tx_channel_type);
+		rcu_read_unlock();
 	}
 
-	if (chandef->width != vht_chandef.width && verbose)
-		sdata_info(sdata,
-			   "capabilities/regulatory prevented using AP HT/VHT configuration, downgraded\n");
+	if (queues_stopped)
+		ieee80211_wake_queues_by_reason(&sdata->local->hw,
+			IEEE80211_QUEUE_STOP_REASON_CHTYPE_CHANGE);
 
-	WARN_ON_ONCE(!cfg80211_chandef_valid(chandef));
-	return ret;
-}
-
-static int ieee80211_config_bw(struct ieee80211_sub_if_data *sdata,
-			       struct sta_info *sta,
-			       const struct ieee80211_ht_operation *ht_oper,
-			       const struct ieee80211_vht_operation *vht_oper,
-			       const u8 *bssid, u32 *changed)
-{
-	struct ieee80211_local *local = sdata->local;
-	struct ieee80211_if_managed *ifmgd = &sdata->u.mgd;
-	struct ieee80211_supported_band *sband;
-	struct ieee80211_channel *chan;
-	struct cfg80211_chan_def chandef;
-	u16 ht_opmode;
-	u32 flags;
-	enum ieee80211_sta_rx_bandwidth new_sta_bw;
-	int ret;
-
-	/* if HT was/is disabled, don't track any bandwidth changes */
-	if (ifmgd->flags & IEEE80211_STA_DISABLE_HT || !ht_oper)
-		return 0;
-
-	/* don't check VHT if we associated as non-VHT station */
-	if (ifmgd->flags & IEEE80211_STA_DISABLE_VHT)
-		vht_oper = NULL;
-
-	if (WARN_ON_ONCE(!sta))
-		return -EINVAL;
-
-	chan = sdata->vif.bss_conf.chandef.chan;
-	sband = local->hw.wiphy->bands[chan->band];
-
-	/* calculate new channel (type) based on HT/VHT operation IEs */
-	flags = ieee80211_determine_chantype(sdata, sband, chan, ht_oper,
-					     vht_oper, &chandef, false);
-
-	/*
-	 * Downgrade the new channel if we associated with restricted
-	 * capabilities. For example, if we associated as a 20 MHz STA
-	 * to a 40 MHz AP (due to regulatory, capabilities or config
-	 * reasons) then switching to a 40 MHz channel now won't do us
-	 * any good -- we couldn't use it with the AP.
-	 */
-	if (ifmgd->flags & IEEE80211_STA_DISABLE_80P80MHZ &&
-	    chandef.width == NL80211_CHAN_WIDTH_80P80)
-		flags |= chandef_downgrade(&chandef);
-	if (ifmgd->flags & IEEE80211_STA_DISABLE_160MHZ &&
-	    chandef.width == NL80211_CHAN_WIDTH_160)
-		flags |= chandef_downgrade(&chandef);
-	if (ifmgd->flags & IEEE80211_STA_DISABLE_40MHZ &&
-	    chandef.width > NL80211_CHAN_WIDTH_20)
-		flags |= chandef_downgrade(&chandef);
-
-	if (cfg80211_chandef_identical(&chandef, &sdata->vif.bss_conf.chandef))
-		return 0;
-
-	sdata_info(sdata,
-		   "AP %pM changed bandwidth, new config is %d MHz, width %d (%d/%d MHz)\n",
-		   ifmgd->bssid, chandef.chan->center_freq, chandef.width,
-		   chandef.center_freq1, chandef.center_freq2);
-
-	if (flags != (ifmgd->flags & (IEEE80211_STA_DISABLE_HT |
-				      IEEE80211_STA_DISABLE_VHT |
-				      IEEE80211_STA_DISABLE_40MHZ |
-				      IEEE80211_STA_DISABLE_80P80MHZ |
-				      IEEE80211_STA_DISABLE_160MHZ)) ||
-	    !cfg80211_chandef_valid(&chandef)) {
-		sdata_info(sdata,
-			   "AP %pM changed bandwidth in a way we can't support - disconnect\n",
-			   ifmgd->bssid);
-		return -EINVAL;
-	}
-
-	switch (chandef.width) {
-	case NL80211_CHAN_WIDTH_20_NOHT:
-	case NL80211_CHAN_WIDTH_20:
-		new_sta_bw = IEEE80211_STA_RX_BW_20;
-		break;
-	case NL80211_CHAN_WIDTH_40:
-		new_sta_bw = IEEE80211_STA_RX_BW_40;
-		break;
-	case NL80211_CHAN_WIDTH_80:
-		new_sta_bw = IEEE80211_STA_RX_BW_80;
-		break;
-	case NL80211_CHAN_WIDTH_80P80:
-	case NL80211_CHAN_WIDTH_160:
-		new_sta_bw = IEEE80211_STA_RX_BW_160;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	if (new_sta_bw > sta->cur_max_bandwidth)
-		new_sta_bw = sta->cur_max_bandwidth;
-
-	if (new_sta_bw < sta->sta.bandwidth) {
-		sta->sta.bandwidth = new_sta_bw;
-		rate_control_rate_update(local, sband, sta,
-					 IEEE80211_RC_BW_CHANGED);
-	}
-
-	ret = ieee80211_vif_change_bandwidth(sdata, &chandef, changed);
-	if (ret) {
-		sdata_info(sdata,
-			   "AP %pM changed bandwidth to incompatible one - disconnect\n",
-			   ifmgd->bssid);
-		return ret;
-	}
-
-	if (new_sta_bw > sta->sta.bandwidth) {
-		sta->sta.bandwidth = new_sta_bw;
-		rate_control_rate_update(local, sband, sta,
-					 IEEE80211_RC_BW_CHANGED);
-	}
-
-	ht_opmode = le16_to_cpu(ht_oper->operation_mode);
+	ht_opmode = le16_to_cpu(hti->operation_mode);
 
 	/* if bss configuration changed store the new one */
 	if (sdata->vif.bss_conf.ht_operation_mode != ht_opmode) {
@@ -1850,10 +1675,15 @@ static void ieee80211_set_disassoc(struct ieee80211_sub_if_data *sdata,
 	if (WARN_ON(!ifmgd->associated))
 		return;
 
-	ieee80211_stop_poll(sdata);
-
 	ifmgd->associated = NULL;
-	netif_carrier_off(sdata->dev);
+
+	/*
+	 * we need to commit the associated = NULL change because the
+	 * scan code uses that to determine whether this iface should
+	 * go to/wake up from powersave or not -- and could otherwise
+	 * wake the queues erroneously.
+	 */
+	smp_mb();
 
 	/*
 	 * if we want to get out of ps before disassoc (why?) we have
@@ -1869,9 +1699,13 @@ static void ieee80211_set_disassoc(struct ieee80211_sub_if_data *sdata,
 	/* disable per-vif ps */
 	ieee80211_recalc_ps_vif(sdata);
 
-	/* flush out any pending frame (e.g. DELBA) before deauth/disassoc */
-	if (tx)
-		ieee80211_flush_queues(local, sdata);
+	mutex_lock(&local->sta_mtx);
+	sta = sta_info_get(sdata, ifmgd->bssid);
+	if (sta) {
+		set_sta_flag(sta, WLAN_STA_BLOCK_BA);
+		ieee80211_sta_tear_down_BA_sessions(sta, tx);
+	}
+	mutex_unlock(&local->sta_mtx);
 
 	/* deauthenticate/disassociate now */
 	if (tx || frame_buf)
@@ -1881,6 +1715,9 @@ static void ieee80211_set_disassoc(struct ieee80211_sub_if_data *sdata,
 	/* flush out frame */
 	if (tx)
 		ieee80211_flush_queues(local, sdata);
+
+	/* clear bssid only after building the needed mgmt frames */
+	memset(ifmgd->bssid, 0, ETH_ALEN);
 
 	/* clear bssid only after building the needed mgmt frames */
 	memset(ifmgd->bssid, 0, ETH_ALEN);
@@ -2331,8 +2168,8 @@ ieee80211_rx_mgmt_auth(struct ieee80211_sub_if_data *sdata,
 	}
 
 	if (status_code != WLAN_STATUS_SUCCESS) {
-		sdata_info(sdata, "%pM denied authentication (status %d)\n",
-			   mgmt->sa, status_code);
+		printk(KERN_DEBUG "%s: %pM denied authentication (status %d)\n",
+		       sdata->name, mgmt->sa, status_code);
 		ieee80211_destroy_auth_data(sdata, false);
 		return RX_MGMT_CFG80211_RX_AUTH;
 	}
@@ -2356,7 +2193,7 @@ ieee80211_rx_mgmt_auth(struct ieee80211_sub_if_data *sdata,
 		return RX_MGMT_NONE;
 	}
 
-	sdata_info(sdata, "authenticated\n");
+	printk(KERN_DEBUG "%s: authenticated\n", sdata->name);
 	ifmgd->auth_data->done = true;
 	ifmgd->auth_data->timeout = jiffies + IEEE80211_AUTH_WAIT_ASSOC;
 	ifmgd->auth_data->timeout_started = true;
@@ -2815,10 +2652,10 @@ ieee80211_rx_mgmt_assoc_resp(struct ieee80211_sub_if_data *sdata,
 		if (!ieee80211_assoc_success(sdata, *bss, mgmt, len)) {
 			/* oops -- internal error -- send timeout for now */
 			ieee80211_destroy_assoc_data(sdata, false);
-			cfg80211_put_bss(sdata->local->hw.wiphy, *bss);
+			cfg80211_put_bss(*bss);
 			return RX_MGMT_CFG80211_ASSOC_TIMEOUT;
 		}
-		sdata_info(sdata, "associated\n");
+		printk(KERN_DEBUG "%s: associated\n", sdata->name);
 
 		/*
 		 * destroy assoc_data afterwards, as otherwise an idle

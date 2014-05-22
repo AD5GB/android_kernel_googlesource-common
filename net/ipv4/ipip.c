@@ -213,6 +213,43 @@ static netdev_tx_t ipip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct ip_tunnel *tunnel = netdev_priv(dev);
 	const struct iphdr  *tiph = &tunnel->parms.iph;
+	u8     tos = tunnel->parms.iph.tos;
+	__be16 df = tiph->frag_off;
+	struct rtable *rt;     			/* Route to the other host */
+	struct net_device *tdev;		/* Device to other host */
+	const struct iphdr  *old_iph = ip_hdr(skb);
+	struct iphdr  *iph;			/* Our new IP header */
+	unsigned int max_headroom;		/* The extra header space needed */
+	__be32 dst = tiph->daddr;
+	struct flowi4 fl4;
+	int    mtu;
+
+	if (skb->protocol != htons(ETH_P_IP))
+		goto tx_error;
+
+	if (tos & 1)
+		tos = old_iph->tos;
+
+	memset(&(IPCB(skb)->opt), 0, sizeof(IPCB(skb)->opt));
+	if (!dst) {
+		/* NBMA tunnel */
+		if ((rt = skb_rtable(skb)) == NULL) {
+			dev->stats.tx_fifo_errors++;
+			goto tx_error;
+		}
+		dst = rt->rt_gateway;
+	}
+
+	rt = ip_route_output_ports(dev_net(dev), &fl4, NULL,
+				   dst, tiph->saddr,
+				   0, 0,
+				   IPPROTO_IPIP, RT_TOS(tos),
+				   tunnel->parms.link);
+	if (IS_ERR(rt)) {
+		dev->stats.tx_carrier_errors++;
+		goto tx_error_icmp;
+	}
+	tdev = rt->dst.dev;
 
 	if (unlikely(skb->protocol != htons(ETH_P_IP)))
 		goto tx_error;
@@ -222,7 +259,33 @@ static netdev_tx_t ipip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 		skb->encapsulation = 1;
 	}
 
-	ip_tunnel_xmit(skb, dev, tiph);
+	skb->transport_header = skb->network_header;
+	skb_push(skb, sizeof(struct iphdr));
+	skb_reset_network_header(skb);
+	IPCB(skb)->flags &= ~(IPSKB_XFRM_TUNNEL_SIZE | IPSKB_XFRM_TRANSFORMED |
+			      IPSKB_REROUTED);
+	skb_dst_drop(skb);
+	skb_dst_set(skb, &rt->dst);
+
+	/*
+	 *	Push down and install the IPIP header.
+	 */
+
+	iph 			=	ip_hdr(skb);
+	iph->version		=	4;
+	iph->ihl		=	sizeof(struct iphdr)>>2;
+	iph->frag_off		=	df;
+	iph->protocol		=	IPPROTO_IPIP;
+	iph->tos		=	INET_ECN_encapsulate(tos, old_iph->tos);
+	iph->daddr		=	fl4.daddr;
+	iph->saddr		=	fl4.saddr;
+
+	if ((iph->ttl = tiph->ttl) == 0)
+		iph->ttl	=	old_iph->ttl;
+
+	nf_reset(skb);
+	tstats = this_cpu_ptr(dev->tstats);
+	__IPTUNNEL_XMIT(tstats, &dev->stats);
 	return NETDEV_TX_OK;
 
 tx_error:

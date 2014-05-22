@@ -1286,7 +1286,17 @@ loop_get_status64(struct loop_device *lo, struct loop_info64 __user *arg) {
 static int loop_set_capacity(struct loop_device *lo, struct block_device *bdev)
 {
 	if (unlikely(lo->lo_state != Lo_bound))
-		return -ENXIO;
+		goto out;
+	err = figure_loop_size(lo, lo->lo_offset, lo->lo_sizelimit);
+	if (unlikely(err))
+		goto out;
+	sec = get_capacity(lo->lo_disk);
+	/* the width of sector_t may be narrow for bit-shift */
+	sz = sec;
+	sz <<= 9;
+	bd_set_size(bdev, sz);
+	/* let user-space know about the new size */
+	kobject_uevent(&disk_to_dev(bdev->bd_disk)->kobj, KOBJ_CHANGE);
 
 	return figure_loop_size(lo, lo->lo_offset, lo->lo_sizelimit);
 }

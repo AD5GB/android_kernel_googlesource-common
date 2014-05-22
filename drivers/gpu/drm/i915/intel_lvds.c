@@ -487,6 +487,23 @@ out:
 	return true;
 }
 
+static void intel_lvds_prepare(struct drm_encoder *encoder)
+{
+	struct intel_lvds *intel_lvds = to_intel_lvds(encoder);
+
+	intel_lvds_disable(intel_lvds);
+}
+
+static void intel_lvds_commit(struct drm_encoder *encoder)
+{
+	struct intel_lvds *intel_lvds = to_intel_lvds(encoder);
+
+	/* Always do a full power on as we do not know what state
+	 * we were left in.
+	 */
+	intel_lvds_enable(intel_lvds);
+}
+
 static void intel_lvds_mode_set(struct drm_encoder *encoder,
 				struct drm_display_mode *mode,
 				struct drm_display_mode *adjusted_mode)
@@ -1252,9 +1269,9 @@ bool intel_lvds_init(struct drm_device *dev)
 		goto failed;
 
 out:
-	lvds_encoder->is_dual_link = compute_is_dual_link_lvds(lvds_encoder);
-	DRM_DEBUG_KMS("detected %s-link lvds configuration\n",
-		      lvds_encoder->is_dual_link ? "dual" : "single");
+	if (HAS_PCH_SPLIT(dev) &&
+	    !(dev_priv->quirks & QUIRK_NO_PCH_PWM_ENABLE)) {
+		u32 pwm;
 
 	/*
 	 * Unlock registers and just

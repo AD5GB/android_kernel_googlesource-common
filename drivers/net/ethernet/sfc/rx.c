@@ -53,7 +53,18 @@ static unsigned int rx_refill_threshold;
  * This must be at least 1 to prevent overflow, plus one packet-worth
  * to allow pipelined receives.
  */
-#define EFX_RXD_HEAD_ROOM (1 + EFX_RX_MAX_FRAGS)
+#define EFX_RXD_HEAD_ROOM 2
+
+/* Offset of ethernet header within page */
+static inline unsigned int efx_rx_buf_offset(struct efx_nic *efx,
+					     struct efx_rx_buffer *buf)
+{
+	return buf->page_offset + efx->type->rx_buffer_hash_size;
+}
+static inline unsigned int efx_rx_buf_size(struct efx_nic *efx)
+{
+	return PAGE_SIZE << efx->rx_buffer_order;
+}
 
 static inline u8 *efx_rx_buf_va(struct efx_rx_buffer *buf)
 {
@@ -153,6 +164,7 @@ static int efx_init_rx_buffers(struct efx_rx_queue *rx_queue)
 	struct efx_nic *efx = rx_queue->efx;
 	struct efx_rx_buffer *rx_buf;
 	struct page *page;
+	void *page_addr;
 	unsigned int page_offset;
 	struct efx_rx_page_state *state;
 	dma_addr_t dma_addr;
@@ -185,22 +197,28 @@ static int efx_init_rx_buffers(struct efx_rx_queue *rx_queue)
 		dma_addr += sizeof(struct efx_rx_page_state);
 		page_offset = sizeof(struct efx_rx_page_state);
 
-		do {
-			index = rx_queue->added_count & rx_queue->ptr_mask;
-			rx_buf = efx_rx_buffer(rx_queue, index);
-			rx_buf->dma_addr = dma_addr + NET_IP_ALIGN;
-			rx_buf->page = page;
-			rx_buf->page_offset = page_offset + NET_IP_ALIGN;
-			rx_buf->len = efx->rx_dma_len;
-			rx_buf->flags = 0;
-			++rx_queue->added_count;
-			get_page(page);
-			dma_addr += efx->rx_page_buf_step;
-			page_offset += efx->rx_page_buf_step;
-		} while (page_offset + efx->rx_page_buf_step <= PAGE_SIZE);
+	split:
+		index = rx_queue->added_count & rx_queue->ptr_mask;
+		rx_buf = efx_rx_buffer(rx_queue, index);
+		rx_buf->dma_addr = dma_addr + EFX_PAGE_IP_ALIGN;
+		rx_buf->u.page = page;
+		rx_buf->page_offset = page_offset + EFX_PAGE_IP_ALIGN;
+		rx_buf->len = efx->rx_buffer_len - EFX_PAGE_IP_ALIGN;
+		rx_buf->flags = EFX_RX_BUF_PAGE;
+		++rx_queue->added_count;
+		++rx_queue->alloc_page_count;
+		++state->refcnt;
 
-		rx_buf->flags = EFX_RX_BUF_LAST_IN_PAGE;
-	} while (++count < efx->rx_pages_per_batch);
+		if ((~count & 1) && (efx->rx_buffer_len <= EFX_RX_HALF_PAGE)) {
+			/* Use the second half of the page */
+			get_page(page);
+			dma_addr += (PAGE_SIZE >> 1);
+			page_addr += (PAGE_SIZE >> 1);
+			page_offset += (PAGE_SIZE >> 1);
+			++count;
+			goto split;
+		}
+	}
 
 	return 0;
 }
@@ -209,16 +227,26 @@ static int efx_init_rx_buffers(struct efx_rx_queue *rx_queue)
  * buffer in a page.
  */
 static void efx_unmap_rx_buffer(struct efx_nic *efx,
-				struct efx_rx_buffer *rx_buf)
+				struct efx_rx_buffer *rx_buf,
+				unsigned int used_len)
 {
-	struct page *page = rx_buf->page;
+	if ((rx_buf->flags & EFX_RX_BUF_PAGE) && rx_buf->u.page) {
+		struct efx_rx_page_state *state;
 
-	if (page) {
-		struct efx_rx_page_state *state = page_address(page);
-		dma_unmap_page(&efx->pci_dev->dev,
-			       state->dma_addr,
-			       PAGE_SIZE << efx->rx_buffer_order,
-			       DMA_FROM_DEVICE);
+		state = page_address(rx_buf->u.page);
+		if (--state->refcnt == 0) {
+			pci_unmap_page(efx->pci_dev,
+				       state->dma_addr,
+				       efx_rx_buf_size(efx),
+				       PCI_DMA_FROMDEVICE);
+		} else if (used_len) {
+			dma_sync_single_for_cpu(&efx->pci_dev->dev,
+						rx_buf->dma_addr, used_len,
+						DMA_FROM_DEVICE);
+		}
+	} else if (!(rx_buf->flags & EFX_RX_BUF_PAGE) && rx_buf->u.skb) {
+		pci_unmap_single(efx->pci_dev, rx_buf->dma_addr,
+				 rx_buf->len, PCI_DMA_FROMDEVICE);
 	}
 }
 
@@ -237,10 +265,9 @@ static void efx_free_rx_buffer(struct efx_rx_buffer *rx_buf)
 static void efx_recycle_rx_page(struct efx_channel *channel,
 				struct efx_rx_buffer *rx_buf)
 {
-	struct page *page = rx_buf->page;
-	struct efx_rx_queue *rx_queue = efx_channel_get_rx_queue(channel);
-	struct efx_nic *efx = rx_queue->efx;
-	unsigned index;
+	efx_unmap_rx_buffer(rx_queue->efx, rx_buf, 0);
+	efx_free_rx_buffer(rx_queue->efx, rx_buf);
+}
 
 	/* Only recycle the page after processing the final buffer. */
 	if (!(rx_buf->flags & EFX_RX_BUF_LAST_IN_PAGE))
@@ -251,19 +278,14 @@ static void efx_recycle_rx_page(struct efx_channel *channel,
 		unsigned read_index = rx_queue->page_remove &
 			rx_queue->page_ptr_mask;
 
-		/* The next slot in the recycle ring is available, but
-		 * increment page_remove if the read pointer currently
-		 * points here.
-		 */
-		if (read_index == index)
-			++rx_queue->page_remove;
-		rx_queue->page_ring[index] = page;
-		++rx_queue->page_add;
-		return;
-	}
-	++rx_queue->page_recycle_full;
-	efx_unmap_rx_buffer(efx, rx_buf);
-	put_page(rx_buf->page);
+	index = rx_queue->added_count & rx_queue->ptr_mask;
+	new_buf = efx_rx_buffer(rx_queue, index);
+	new_buf->u.page = rx_buf->u.page;
+	new_buf->page_offset = rx_buf->page_offset ^ (PAGE_SIZE >> 1);
+	new_buf->dma_addr = state->dma_addr + new_buf->page_offset;
+	new_buf->len = rx_buf->len;
+	new_buf->flags = EFX_RX_BUF_PAGE;
+	++rx_queue->added_count;
 }
 
 static void efx_fini_rx_buffer(struct efx_rx_queue *rx_queue,
@@ -538,13 +560,10 @@ void efx_rx_packet(struct efx_rx_queue *rx_queue, unsigned int index,
 		return;
 	}
 
-	if (n_frags == 1)
-		rx_buf->len = len;
-
-	/* Release and/or sync the DMA mapping - assumes all RX buffers
-	 * consumed in-order per RX queue.
+	/* Release and/or sync DMA mapping - assumes all RX buffers
+	 * consumed in-order per RX queue
 	 */
-	efx_sync_rx_buffer(efx, rx_buf, rx_buf->len);
+	efx_unmap_rx_buffer(efx, rx_buf, len);
 
 	/* Prefetch nice and early so data will (hopefully) be in cache by
 	 * the time we look at it.

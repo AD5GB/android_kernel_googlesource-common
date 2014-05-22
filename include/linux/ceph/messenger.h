@@ -145,13 +145,13 @@ struct ceph_msg {
 	struct ceph_msg_footer footer;	/* footer */
 	struct kvec front;              /* unaligned blobs of message */
 	struct ceph_buffer *middle;
-
-	size_t				data_length;
-	struct list_head		data;
-	struct ceph_msg_data_cursor	cursor;
+	struct page **pages;            /* data payload.  NOT OWNER. */
+	unsigned nr_pages;              /* size of page array */
+	unsigned page_alignment;        /* io offset in first page */
+	struct ceph_pagelist *pagelist; /* instead of pages */
 
 	struct ceph_connection *con;
-	struct list_head list_head;	/* links for connection lists */
+	struct list_head list_head;
 
 	struct kref kref;
 	bool front_is_vmalloc;
@@ -274,15 +274,6 @@ extern void ceph_msg_revoke(struct ceph_msg *msg);
 extern void ceph_msg_revoke_incoming(struct ceph_msg *msg);
 
 extern void ceph_con_keepalive(struct ceph_connection *con);
-
-extern void ceph_msg_data_add_pages(struct ceph_msg *msg, struct page **pages,
-				size_t length, size_t alignment);
-extern void ceph_msg_data_add_pagelist(struct ceph_msg *msg,
-				struct ceph_pagelist *pagelist);
-#ifdef CONFIG_BLOCK
-extern void ceph_msg_data_add_bio(struct ceph_msg *msg, struct bio *bio,
-				size_t length);
-#endif /* CONFIG_BLOCK */
 
 extern struct ceph_msg *ceph_msg_new(int type, int front_len, gfp_t flags,
 				     bool can_fail);

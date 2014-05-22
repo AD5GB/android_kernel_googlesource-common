@@ -77,9 +77,9 @@ struct acpi_power_resource {
 	struct mutex resource_lock;
 };
 
-struct acpi_power_resource_entry {
-	struct list_head node;
-	struct acpi_power_resource *resource;
+	/* List of devices relying on this power resource */
+	struct acpi_power_resource_device *devices;
+	struct mutex devices_lock;
 };
 
 static LIST_HEAD(acpi_power_resource_list);
@@ -276,6 +276,15 @@ static int __acpi_power_on(struct acpi_power_resource *resource)
 static int acpi_power_on_unlocked(struct acpi_power_resource *resource)
 {
 	int result = 0;
+	bool resume_device = false;
+	struct acpi_power_resource *resource = NULL;
+	struct acpi_power_resource_device *device_list;
+
+	result = acpi_power_get_context(handle, &resource);
+	if (result)
+		return result;
+
+	mutex_lock(&resource->resource_lock);
 
 	if (resource->ref_count++) {
 		ACPI_DEBUG_PRINT((ACPI_DB_INFO,
@@ -285,12 +294,8 @@ static int acpi_power_on_unlocked(struct acpi_power_resource *resource)
 		result = __acpi_power_on(resource);
 		if (result) {
 			resource->ref_count--;
-		} else {
-			struct acpi_power_dependent_device *dep;
-
-			list_for_each_entry(dep, &resource->dependent, node)
-				schedule_work(&dep->work);
-		}
+		else
+			resume_device = true;
 	}
 	return result;
 }
@@ -299,9 +304,19 @@ static int acpi_power_on(struct acpi_power_resource *resource)
 {
 	int result;
 
-	mutex_lock(&resource->resource_lock);
-	result = acpi_power_on_unlocked(resource);
-	mutex_unlock(&resource->resource_lock);
+	if (!resume_device)
+		return result;
+
+	mutex_lock(&resource->devices_lock);
+
+	device_list = resource->devices;
+	while (device_list) {
+		acpi_power_on_device(device_list->device);
+		device_list = device_list->next;
+	}
+
+	mutex_unlock(&resource->devices_lock);
+
 	return result;
 }
 
@@ -419,21 +434,24 @@ static void acpi_power_remove_dependent(struct acpi_power_resource *resource,
 	struct acpi_power_dependent_device *dep;
 	struct work_struct *work = NULL;
 
-	mutex_lock(&resource->resource_lock);
+	mutex_lock(&resource->devices_lock);
+	prev = NULL;
+	curr = resource->devices;
+	while (curr) {
+		if (curr->device->dev == dev) {
+			if (!prev)
+				resource->devices = curr->next;
+			else
+				prev->next = curr->next;
 
-	list_for_each_entry(dep, &resource->dependent, node)
-		if (dep->adev == adev) {
-			list_del(&dep->node);
-			work = &dep->work;
+			kfree(curr);
 			break;
 		}
 
-	mutex_unlock(&resource->resource_lock);
-
-	if (work) {
-		cancel_work_sync(work);
-		kfree(dep);
+		prev = curr;
+		curr = curr->next;
 	}
+	mutex_unlock(&resource->devices_lock);
 }
 
 static struct attribute *attrs[] = {
@@ -500,16 +518,10 @@ static void acpi_power_expose_list(struct acpi_device *adev,
 	list_for_each_entry(entry, resources, node) {
 		struct acpi_device *res_dev = &entry->resource->device;
 
-		ret = sysfs_add_link_to_group(&adev->dev.kobj,
-					      attr_group->name,
-					      &res_dev->dev.kobj,
-					      dev_name(&res_dev->dev));
-		if (ret) {
-			acpi_power_hide_list(adev, resources, attr_group);
-			break;
-		}
-	}
-}
+	mutex_lock(&resource->devices_lock);
+	power_resource_device->next = resource->devices;
+	resource->devices = power_resource_device;
+	mutex_unlock(&resource->devices_lock);
 
 static void acpi_power_expose_hide(struct acpi_device *adev,
 				   struct list_head *resources,
@@ -576,10 +588,9 @@ int acpi_power_wakeup_list_init(struct list_head *list, int *system_level_p)
 		if (system_level > resource->system_level)
 			system_level = resource->system_level;
 
-		mutex_unlock(&resource->resource_lock);
-	}
-	*system_level_p = system_level;
-	return 0;
+no_power_resource:
+	printk(KERN_DEBUG PREFIX "Invalid Power Resource to register!");
+	return -ENODEV;
 }
 
 /* --------------------------------------------------------------------------
@@ -884,9 +895,8 @@ int acpi_add_power_resource(acpi_handle handle)
 	acpi_init_device_object(device, handle, ACPI_BUS_TYPE_POWER,
 				ACPI_STA_DEFAULT);
 	mutex_init(&resource->resource_lock);
-	INIT_LIST_HEAD(&resource->dependent);
-	INIT_LIST_HEAD(&resource->list_node);
-	resource->name = device->pnp.bus_id;
+	mutex_init(&resource->devices_lock);
+	strcpy(resource->name, device->pnp.bus_id);
 	strcpy(acpi_device_name(device), ACPI_POWER_DEVICE_NAME);
 	strcpy(acpi_device_class(device), ACPI_POWER_CLASS);
 	device->power.state = ACPI_STATE_UNKNOWN;

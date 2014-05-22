@@ -1077,18 +1077,12 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 	len = svc_partial_recvfrom(rqstp, vec, pnum, want, base);
 	if (len >= 0) {
 		svsk->sk_tcplen += len;
-		svsk->sk_datalen += len;
-	}
-	if (len != want || !svc_sock_final_rec(svsk)) {
+	if (len != want) {
 		svc_tcp_save_pages(svsk, rqstp);
 		if (len < 0 && len != -EAGAIN)
-			goto err_delete;
-		if (len == want)
-			svc_tcp_fragment_received(svsk);
-		else
-			dprintk("svc: incomplete TCP record (%d of %d)\n",
-				(int)(svsk->sk_tcplen - sizeof(rpc_fraghdr)),
-				svc_sock_reclen(svsk));
+			goto err_other;
+		dprintk("svc: incomplete TCP record (%d of %d)\n",
+			svsk->sk_tcplen, svsk->sk_reclen);
 		goto err_noclose;
 	}
 
