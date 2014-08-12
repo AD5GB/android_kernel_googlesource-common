@@ -153,6 +153,9 @@ struct input_keymap_entry {
 
 #define EVIOCGRAB		_IOW('E', 0x90, int)			/* Grab/Release device */
 
+/* HACK: disable conflicting EVIOCREVOKE until Android userspace stops using EVIOCSSUSPENDBLOCK */
+/*#define EVIOCREVOKE		_IOW('E', 0x91, int)*/			/* Revoke device access */
+
 #define EVIOCGSUSPENDBLOCK	_IOR('E', 0x91, int)			/* get suspend block enable */
 #define EVIOCSSUSPENDBLOCK	_IOW('E', 0x91, int)			/* set suspend block enable */
 
@@ -197,6 +200,8 @@ struct input_keymap_entry {
 #define SYN_CONFIG		1
 #define SYN_MT_REPORT		2
 #define SYN_DROPPED		3
+#define SYN_MAX			0xf
+#define SYN_CNT			(SYN_MAX+1)
 
 /*
  * Keys and buttons
@@ -725,17 +730,6 @@ struct input_keymap_entry {
 #define BTN_DPAD_RIGHT		0x223
 
 #define KEY_ALS_TOGGLE		0x230	/* Ambient light sensor */
-
-#define KEY_BUTTONCONFIG		0x240	/* AL Button Configuration */
-#define KEY_TASKMANAGER		0x241	/* AL Task/Project Manager */
-#define KEY_JOURNAL		0x242	/* AL Log/Journal/Timecard */
-#define KEY_CONTROLPANEL		0x243	/* AL Control Panel */
-#define KEY_APPSELECT		0x244	/* AL Select Task/Application */
-#define KEY_SCREENSAVER		0x245	/* AL Screen Saver */
-#define KEY_VOICECOMMAND		0x246	/* Listening Voice Command */
-
-#define KEY_BRIGHTNESS_MIN		0x250	/* Set Brightness to Minimum */
-#define KEY_BRIGHTNESS_MAX		0x251	/* Set Brightness to Maximum */
 
 #define BTN_TRIGGER_HAPPY		0x2c0
 #define BTN_TRIGGER_HAPPY1		0x2c0
