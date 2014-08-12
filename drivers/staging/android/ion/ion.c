@@ -1260,7 +1260,7 @@ static long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (IS_ERR(handle))
 			return PTR_ERR(handle);
 
-		data.allocation.handle = handle->id;
+		data.handle = (ion_user_handle_t)handle->id;
 
 		cleanup_handle = handle;
 		break;
@@ -1297,7 +1297,13 @@ static long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (IS_ERR(handle))
 			ret = PTR_ERR(handle);
 		else
-			data.handle.handle = handle->id;
+			data.handle = (ion_user_handle_t)handle->id;
+
+		if (copy_to_user((void __user *)arg, &data,
+				 sizeof(struct ion_fd_data)))
+			return -EFAULT;
+		if (ret < 0)
+			return ret;
 		break;
 	}
 	case ION_IOC_SYNC:
